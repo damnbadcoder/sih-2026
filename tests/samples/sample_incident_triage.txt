@@ -1,0 +1,13 @@
+INCIDENT TRIAGE LOG - CONFIDENTIAL DEFENSE SECTOR
+Date: 2026-09-02 14:15 UTC
+Analyst: SOC Lead Alpha
+Incident Priority: HIGH
+
+14:15 UTC: Multiple alerts triggered by endpoint detection on perimeter jump box.
+14:22 UTC: Unauthorized PowerShell execution detected with encoded parameters.
+14:35 UTC: Host attempting outbound beaconing to 198.51.100.89 on port 443.
+14:48 UTC: Malicious dropper binary isolated with SHA256: 8f434346648f6b96df89dda901c5176b10e6d0ceec3e4a14e310b73399b358b0
+15:02 UTC: Attacker leveraged CVE-2024-21410 targeting Microsoft Exchange Server.
+15:15 UTC: Secondary connection established with malicious domain bad-relay-dns.net.
+15:30 UTC: Host quarantined. Forensics initiated.
+Mitigation underway.
