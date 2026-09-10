@@ -98,10 +98,31 @@ export default function Dashboard() {
       ? Array.from(selected)[0]
       : null;
 
-  function goToStep1() {
+  function startNewTransformation() {
     setGen(null);
     setPreviewsByType({});
     setActivePreviewId(null);
+    setSelected(new Set());
+    setParamsByType({});
+    setOpenParams(null);
+    setSourceText("");
+    setFileNames([]);
+    setLinks("");
+    setPreviewCitations([]);
+    setEditing(false);
+    setDraft("");
+    setRefinement("");
+    setGenError("");
+  }
+
+  function goToStep1() {
+    if (currentStage === 3) {
+      startNewTransformation();
+    } else {
+      setGen(null);
+      setPreviewsByType({});
+      setActivePreviewId(null);
+    }
   }
 
   function goToStep2() {
@@ -368,6 +389,9 @@ export default function Dashboard() {
             <div className="avatar">{user.name.slice(0, 1).toUpperCase()}</div>
             <div><strong>{user.name}</strong><span>{user.email}</span><span>{user.organisation || user.userType}</span></div>
           </div>
+          <button className="primary sm" onClick={startNewTransformation} style={{ width: "100%" }}>
+            + New Transformation
+          </button>
           <h2 className="col-title">History</h2>
           {history.length === 0 ? <p className="muted sidebar-empty">No generations yet.</p> : (
             <ul className="card history">
@@ -429,7 +453,7 @@ export default function Dashboard() {
             </button>
           )}
           {gen && (
-            <button className="ghost generate" onClick={() => { setGen(null); setPreviewsByType({}); setActivePreviewId(null); }}>
+            <button className="ghost generate" onClick={startNewTransformation}>
               + Start new transformation
             </button>
           )}
@@ -660,11 +684,7 @@ export default function Dashboard() {
                 <h2 className="col-title">3 · Deliverables</h2>
                 <button
                   className="ghost sm"
-                  onClick={() => {
-                    setGen(null);
-                    setPreviewsByType({});
-                    setActivePreviewId(null);
-                  }}
+                  onClick={startNewTransformation}
                 >
                   + New transformation
                 </button>
