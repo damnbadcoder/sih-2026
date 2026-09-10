@@ -12,12 +12,13 @@ import json
 import hashlib
 import argparse
 from pathlib import Path
-from typing import Optional, List, Dict, Any, Tuple
+from typing import Optional, List, Dict, Any, Tuple, Union
 from dotenv import load_dotenv
 
 # Automatically load environment variables from .env file
 load_dotenv()
 
+from pipelines.base import BasePipeline
 from pipelines.text_pipeline.schema import (
     DocumentMetadata,
     ExtractedSourceContext,
@@ -42,7 +43,7 @@ def calculate_sha256(file_path: str) -> str:
     return sha.hexdigest()
 
 
-class TextIngestionPipeline:
+class TextIngestionPipeline(BasePipeline):
     """Unified multi-format text ingestion and pre-LLM context preparation pipeline."""
 
     SUPPORTED_EXTENSIONS = {
@@ -67,6 +68,46 @@ class TextIngestionPipeline:
         self.text_parser = TextParser()
         self.ioc_extractor = IOCExtractor()
         self.interpreter = GroqInterpreter()
+
+    def process(
+        self,
+        file_input: Union[str, Path, bytes],
+        filename: Optional[str] = None,
+        output_dir: Optional[str] = None,
+        save_outputs: bool = True,
+        enrich: bool = False,
+    ) -> Union[ExtractedSourceContext, Tuple[ExtractedSourceContext, EnrichedGroundingContext]]:
+        """
+        Polymorphic execution entry point satisfying the BasePipeline contract.
+        Accepts a file path string, Path object, or raw in-memory bytes.
+        """
+        if isinstance(file_input, bytes):
+            import tempfile
+            fname = filename or "document.txt"
+            suffix = Path(fname).suffix or ".txt"
+            with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
+                tmp.write(file_input)
+                tmp_path = tmp.name
+            try:
+                if enrich:
+                    raw_ctx, enriched = self.process_and_enrich(tmp_path, output_dir=output_dir, save_outputs=save_outputs)
+                    if filename:
+                        raw_ctx.metadata.file_name = filename
+                    return raw_ctx, enriched
+                raw_ctx = self.process_file(tmp_path, output_dir=output_dir, save_outputs=save_outputs)
+                if filename:
+                    raw_ctx.metadata.file_name = filename
+                return raw_ctx
+            finally:
+                if os.path.exists(tmp_path):
+                    try:
+                        os.unlink(tmp_path)
+                    except OSError:
+                        pass
+        else:
+            if enrich:
+                return self.process_and_enrich(str(file_input), output_dir=output_dir, save_outputs=save_outputs)
+            return self.process_file(str(file_input), output_dir=output_dir, save_outputs=save_outputs)
 
     def process_file(
         self,
@@ -300,6 +341,10 @@ def main():
                 print(f"Locked Facts:      {enriched.locked_numerical_facts}")
                 print(f"Mitigations Count: {len(enriched.actionable_mitigations)}")
             print("=" * 65 + "\n")
+
+
+TextPipeline = TextIngestionPipeline
+ingest_text = lambda file_input, filename=None, output_dir=None, save_outputs=True, enrich=False: TextIngestionPipeline(output_dir=output_dir or "ingestion_outputs").process(file_input, filename=filename, output_dir=output_dir, save_outputs=save_outputs, enrich=enrich)
 
 
 if __name__ == "__main__":

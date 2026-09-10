@@ -17,10 +17,12 @@ from pipelines.video_pipeline.schema import (
     VideoEnrichedGroundingContext,
     VideoMintoPyramid,
 )
-from pipelines.video_pipeline.ingest import VideoIngestionPipeline
+from pipelines.video_pipeline.ingest import VideoIngestionPipeline, VideoPipeline, ingest_video
 
 __all__ = [
+    "VideoPipeline",
     "VideoIngestionPipeline",
+    "ingest_video",
     "VisualType",
     "ExtractedVideoIOCs",
     "AudioSegment",

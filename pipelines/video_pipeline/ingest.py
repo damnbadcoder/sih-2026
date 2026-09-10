@@ -10,12 +10,13 @@ import json
 import hashlib
 import argparse
 from pathlib import Path
-from typing import Optional, List, Dict, Any, Tuple
+from typing import Optional, List, Dict, Any, Tuple, Union
 import cv2
 from dotenv import load_dotenv
 
 load_dotenv()
 
+from pipelines.base import BasePipeline
 from pipelines.video_pipeline.schema import (
     VideoMetadata,
     ExtractedVideoContext,
@@ -30,8 +31,8 @@ from pipelines.video_pipeline.extractors.scene_detector import VideoSceneDetecto
 from pipelines.video_pipeline.extractors.visual_classifier import KeyframeVisualClassifier
 from pipelines.video_pipeline.extractors.specialized_extractors import SpecializedContentExtractor
 from pipelines.video_pipeline.extractors.temporal_aligner import TemporalMultimodalAligner
-from pipelines.text_pipeline.interpreters.interpreter import GroqInterpreter
 from pipelines.text_pipeline.extractors.ioc_extractor import IOCExtractor
+from pipelines.text_pipeline.interpreters.interpreter import GroqInterpreter
 
 
 def calculate_sha256(file_path: str) -> str:
@@ -43,7 +44,7 @@ def calculate_sha256(file_path: str) -> str:
     return sha.hexdigest()
 
 
-class VideoIngestionPipeline:
+class VideoIngestionPipeline(BasePipeline):
     """Unified multimodal video ingestion, scene triage, and temporal alignment pipeline."""
 
     SUPPORTED_EXTENSIONS = {
@@ -66,6 +67,18 @@ class VideoIngestionPipeline:
         self.temporal_aligner = TemporalMultimodalAligner()
         self.ioc_extractor = IOCExtractor()
         self.interpreter = GroqInterpreter()
+
+    def process(
+        self,
+        video_input: Union[str, Path],
+        output_dir: Optional[str] = None,
+        save_outputs: bool = True,
+        enrich: bool = False
+    ) -> Union[ExtractedVideoContext, Tuple[ExtractedVideoContext, VideoEnrichedGroundingContext]]:
+        """Polymorphic execution entry point satisfying the BasePipeline contract."""
+        if enrich:
+            return self.process_and_enrich(str(video_input), output_dir=output_dir, save_outputs=save_outputs)
+        return self.process_video(str(video_input), output_dir=output_dir, save_outputs=save_outputs)
 
     def process_video(
         self,
@@ -376,6 +389,10 @@ def main():
             print(f"Minto Situation: {enriched.minto_pyramid.situation}")
             print(f"Minto Solution:  {enriched.minto_pyramid.solution}")
         print("=" * 65 + "\n")
+
+
+VideoPipeline = VideoIngestionPipeline
+ingest_video = lambda video_input, output_dir=None, save_outputs=True, enrich=False: VideoIngestionPipeline(output_dir=output_dir or "ingestion_outputs").process(video_input, output_dir=output_dir, save_outputs=save_outputs, enrich=enrich)
 
 
 if __name__ == "__main__":

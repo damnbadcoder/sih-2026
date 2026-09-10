@@ -114,6 +114,20 @@ class TestTextIngestionPipeline(unittest.TestCase):
         self.assertTrue(final_enriched_md.exists(), "Enriched markdown file should exist")
         self.assertTrue(final_enriched_json.exists(), "Enriched json file should exist")
 
+    def test_base_pipeline_and_bytes_processing(self):
+        """Verifies BasePipeline contract implementation and byte-level document processing."""
+        from pipelines.text_pipeline import TextPipeline, ingest_text
+        pipeline = TextPipeline(output_dir=str(self.output_dir))
+        sample_doc = b"# Threat Intel Alert\n\nAdversary deployed CVE-2024-38077 targeting 198.51.100.42.\n"
+        res = pipeline.process(sample_doc, filename="memory_advisory.md", save_outputs=False)
+        self.assertEqual(res.metadata.file_name, "memory_advisory.md")
+        self.assertIn("CVE-2024-38077", res.iocs.cves)
+        self.assertIn("198.51.100.42", res.iocs.ipv4_addresses)
+
+        # Procedural helper check
+        res2 = ingest_text(sample_doc, filename="memory_advisory2.md", save_outputs=False)
+        self.assertEqual(res2.metadata.file_name, "memory_advisory2.md")
+
 
 if __name__ == "__main__":
     unittest.main()

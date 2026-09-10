@@ -26,3 +26,6 @@ langchain-core>=0.3.0
 
 # Environment Configuration
 python-dotenv>=1.0.0
+
+# Multimodal Gemini Model Inference (Image and Audio pipelines)
+google-genai>=2.0.0

@@ -21,9 +21,12 @@ from pipelines.text_pipeline.schema import (
 
 
 def __getattr__(name: str):
-    if name == "TextIngestionPipeline":
+    if name in ("TextIngestionPipeline", "TextPipeline"):
         from pipelines.text_pipeline.ingest import TextIngestionPipeline
         return TextIngestionPipeline
+    elif name == "ingest_text":
+        from pipelines.text_pipeline.ingest import ingest_text
+        return ingest_text
     elif name in ("Interpreter", "GroqInterpreter", "QwenGroqInterpreter"):
         from pipelines.text_pipeline.interpreters.interpreter import GroqInterpreter
         return GroqInterpreter
@@ -31,7 +34,9 @@ def __getattr__(name: str):
 
 
 __all__ = [
+    "TextPipeline",
     "TextIngestionPipeline",
+    "ingest_text",
     "GroqInterpreter",
     "Interpreter",
     "QwenGroqInterpreter",
