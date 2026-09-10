@@ -1,21 +1,24 @@
 """
-DOCX Parser using python-docx.
-Extracts clean Markdown and structured tables from Microsoft Word (.docx) documents.
+DOCX Parser using python-docx and Tesseract OCR.
+Extracts clean Markdown, structured tables, and embedded images/screenshots
+from Microsoft Word (.docx) documents.
 """
 
 import os
 from typing import Tuple, List
 import docx
-from pipelines.schema import TableData
-from pipelines.extractors.table_utils import format_matrix_to_markdown_table, extract_markdown_tables
+from pipelines.text_pipeline.schema import TableData
+from pipelines.text_pipeline.extractors.table_utils import format_matrix_to_markdown_table, extract_markdown_tables
+from pipelines.text_pipeline.extractors.ocr_utils import extract_text_from_image_bytes, is_ocr_available
 
 
 class DocxParser:
-    """Parses DOCX documents into clean Markdown and structured TableData objects."""
+    """Parses DOCX documents into clean Markdown, structured TableData objects, and OCR image context."""
 
     def parse(self, file_path: str) -> Tuple[str, List[TableData]]:
         """
         Parses a .docx file into clean Markdown and structured TableData objects.
+        Extracts embedded figures and screenshots via OCR.
 
         Args:
             file_path: Path to DOCX file.
@@ -32,12 +35,9 @@ class DocxParser:
         table_counter = 1
 
         # Iterate through paragraphs and tables in document order
-        # doc.element.body contains paragraph and table xml elements in order
         for child in doc.element.body:
             if child.tag.endswith("p"):
-                # It's a paragraph
                 p_elem = child
-                # Find matching paragraph in doc.paragraphs
                 p_obj = None
                 for p in doc.paragraphs:
                     if p._p == p_elem:
@@ -64,7 +64,6 @@ class DocxParser:
                         md_chunks.append(f"{text}\n")
 
             elif child.tag.endswith("tbl"):
-                # It's a table
                 tbl_elem = child
                 tbl_obj = None
                 for t in doc.tables:
@@ -94,9 +93,42 @@ class DocxParser:
                         ))
                         table_counter += 1
 
+        # Extract embedded images and screenshots via OCR
+        image_ocr_blocks = self._extract_embedded_images_ocr(doc)
+        if image_ocr_blocks:
+            md_chunks.append("\n## 🖼️ Extracted Embedded Image & Screenshot Telemetry (OCR)\n")
+            md_chunks.extend(image_ocr_blocks)
+
         full_markdown = "\n".join(md_chunks).strip()
-        # Also check if any tables were missed
+        # Fallback table check
         if not tables_data:
             tables_data = extract_markdown_tables(full_markdown)
 
         return full_markdown, tables_data
+
+    def _extract_embedded_images_ocr(self, doc: docx.Document) -> List[str]:
+        """Scans document relationships for embedded graphics and extracts text using OCR."""
+        if not is_ocr_available():
+            return []
+
+        ocr_blocks: List[str] = []
+        image_idx = 1
+
+        try:
+            for rel_id, part in doc.part.related_parts.items():
+                if hasattr(part, "content_type") and part.content_type.startswith("image/"):
+                    try:
+                        img_bytes = part.blob
+                        ocr_text = extract_text_from_image_bytes(img_bytes)
+                        if ocr_text:
+                            ocr_blocks.append(
+                                f"### 🖼️ Embedded Graphic / Screenshot {image_idx} (OCR)\n\n"
+                                f"```text\n{ocr_text}\n```\n"
+                            )
+                            image_idx += 1
+                    except Exception:
+                        continue
+        except Exception:
+            pass
+
+        return ocr_blocks

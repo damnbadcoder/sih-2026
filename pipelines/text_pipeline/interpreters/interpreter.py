@@ -1,7 +1,7 @@
 """
-Qwen Semantic Interpreter using LangChain and Groq.
-Utilizes Qwen 3.6 27B on Groq to extract rich, actionable context from normalized files
-and produces canonical grounding anchors for downstream generative agents.
+Semantic Intelligence Interpreter using LangChain and Groq.
+Utilizes Groq-hosted LLMs (e.g. Qwen, Llama 3.3, etc.) to extract rich, actionable context
+from normalized files and produces canonical grounding anchors for downstream generative agents.
 """
 
 import os
@@ -19,7 +19,7 @@ from langchain_groq import ChatGroq
 # Automatically load environment variables from .env file
 load_dotenv()
 
-from pipelines.schema import (
+from pipelines.text_pipeline.schema import (
     ExtractedSourceContext,
     EnrichedGroundingContext,
     MintoPyramidAnalysis,
@@ -78,8 +78,8 @@ Extract the complete grounding context according to this exact JSON schema:
 """
 
 
-class QwenGroqInterpreter:
-    """Interprets normalized cybersecurity text using Qwen 3.6 27B on Groq."""
+class GroqInterpreter:
+    """Interprets normalized cybersecurity text using LLMs hosted on Groq."""
 
     DEFAULT_MODEL = "qwen/qwen3.6-27b"
 
@@ -100,7 +100,7 @@ class QwenGroqInterpreter:
         """Initializes the ChatGroq client if API key is present."""
         if not self.api_key:
             return None
-        max_tokens = int(os.environ.get("GROQ_MAX_TOKENS", "2048"))
+        max_tokens = int(os.environ.get("GROQ_MAX_TOKENS", "950"))
         kwargs = {
             "model_name": self.model_name,
             "groq_api_key": self.api_key,
@@ -137,7 +137,7 @@ class QwenGroqInterpreter:
                 )
         else:
             try:
-                enriched = self._invoke_qwen(source_context)
+                enriched = self._invoke_llm(source_context)
             except Exception as e:
                 if self.allow_offline_fallback:
                     print(f"[!] Warning: Groq API call failed ({e}). Falling back to heuristic grounding anchor.")
@@ -152,8 +152,8 @@ class QwenGroqInterpreter:
 
         return enriched
 
-    def _invoke_qwen(self, source_context: ExtractedSourceContext) -> EnrichedGroundingContext:
-        """Calls Qwen on Groq with structured prompt and validates the Pydantic schema."""
+    def _invoke_llm(self, source_context: ExtractedSourceContext) -> EnrichedGroundingContext:
+        """Calls Groq LLM with structured prompt and validates the Pydantic schema."""
         iocs = source_context.iocs
         threat = source_context.threat_intel
 
@@ -175,27 +175,46 @@ class QwenGroqInterpreter:
         ]
 
         actual_model = self.model_name
+        response_content = ""
+
+        # 1. Attempt invocation with configured model
         try:
             response = self.llm.invoke(messages)
-            content = response.content
+            response_content = response.content or ""
         except Exception as err:
-            # If qwen 3.6 hits Groq's 1000 OTPM limit, automatically route to qwen 3.8
-            if "3.6" in self.model_name and ("429" in str(err) or "rate_limit" in str(err).lower() or "too large" in str(err).lower()):
-                print("[*] Note: qwen/qwen3.6-27b reached on-demand token quota. Routing to qwen/qwen3.8-27b...", flush=True)
-                fallback_llm = ChatGroq(
-                    model_name="qwen/qwen3.8-27b",
-                    groq_api_key=self.api_key,
-                    temperature=self.temperature,
-                    max_tokens=2048
-                )
-                response = fallback_llm.invoke(messages)
-                content = response.content
-                actual_model = "qwen/qwen3.8-27b"
-            else:
-                raise err
+            print(f"[*] Note: Primary model '{self.model_name}' encountered: {err}. Attempting failover...", flush=True)
+
+        # 2. If primary model failed, rate-limited, or returned empty content, fail over to available alternatives on Groq
+        if not response_content or len(response_content.strip()) < 10:
+            for alt_model in ["openai/gpt-oss-120b", "openai/gpt-oss-20b", "qwen/qwen3.8-27b"]:
+                if alt_model == self.model_name:
+                    continue
+                try:
+                    print(f"[*] Failover: Invoking {alt_model} on Groq...", flush=True)
+                    alt_kwargs = {
+                        "model_name": alt_model,
+                        "groq_api_key": self.api_key,
+                        "temperature": self.temperature,
+                        "max_tokens": 2500,
+                    }
+                    if "qwen" in alt_model.lower():
+                        alt_kwargs["reasoning_format"] = "hidden"
+                        alt_kwargs["max_tokens"] = 950
+
+                    alt_llm = ChatGroq(**alt_kwargs)
+                    alt_resp = alt_llm.invoke(messages)
+                    if alt_resp.content and len(alt_resp.content.strip()) > 10:
+                        response_content = alt_resp.content
+                        actual_model = alt_model
+                        break
+                except Exception:
+                    continue
+
+        if not response_content:
+            raise ValueError("All Groq model attempts returned empty response content.")
 
         # Parse JSON response
-        parsed_data = self._extract_json_from_response(content)
+        parsed_data = self._extract_json_from_response(response_content)
         
         # Ensure model tag is set
         parsed_data["interpreted_by_model"] = actual_model
@@ -235,7 +254,16 @@ class QwenGroqInterpreter:
             except json.JSONDecodeError:
                 pass
 
-        raise ValueError(f"Failed to extract valid JSON from Qwen response: {text[:200]}...")
+        # If truncated JSON, try closing unclosed quotes and braces
+        if start != -1:
+            candidate = cleaned_text[start:]
+            for suffix in ['"}', '"]}', '"]}}', '"]}}}', '"} }']:
+                try:
+                    return json.loads(candidate + suffix)
+                except json.JSONDecodeError:
+                    continue
+
+        raise ValueError(f"Failed to extract valid JSON from LLM response: {text[:200]}...")
 
     def _recover_and_validate(
         self,
@@ -399,3 +427,11 @@ class QwenGroqInterpreter:
             json.dump(enriched.to_dict(), f, indent=2, ensure_ascii=False)
 
         return md_path, json_path
+
+    # Backwards-compatible method alias
+    _invoke_qwen = _invoke_llm
+
+
+# Generalized aliases
+Interpreter = GroqInterpreter
+QwenGroqInterpreter = GroqInterpreter

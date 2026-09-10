@@ -1,0 +1,3 @@
+"""
+Text pipeline test suite.
+"""

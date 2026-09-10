@@ -8,8 +8,8 @@ import csv
 import json
 from io import StringIO
 from typing import Tuple, List
-from pipelines.schema import TableData
-from pipelines.extractors.table_utils import extract_markdown_tables, format_matrix_to_markdown_table
+from pipelines.text_pipeline.schema import TableData
+from pipelines.text_pipeline.extractors.table_utils import extract_markdown_tables, format_matrix_to_markdown_table
 
 
 class TextParser:

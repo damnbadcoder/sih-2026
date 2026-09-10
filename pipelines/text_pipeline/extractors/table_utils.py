@@ -4,7 +4,7 @@ Utilities for parsing, normalizing, and structuring tables from Markdown and pla
 
 import re
 from typing import List, Tuple
-from pipelines.schema import TableData
+from pipelines.text_pipeline.schema import TableData
 
 
 TABLE_ROW_PATTERN = re.compile(r"^\s*\|(.+)\|\s*$")

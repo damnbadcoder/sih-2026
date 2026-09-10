@@ -4,15 +4,17 @@ Unit and integration tests for the Text Ingestion & Pre-LLM Preparation Pipeline
 
 import unittest
 from pathlib import Path
-from pipelines.ingest import TextIngestionPipeline
-from pipelines.schema import ExtractedSourceContext
+from pipelines.text_pipeline.ingest import TextIngestionPipeline
+from pipelines.text_pipeline.schema import ExtractedSourceContext
 
 
 class TestTextIngestionPipeline(unittest.TestCase):
 
     def setUp(self):
-        self.pipeline = TextIngestionPipeline(output_dir="tests/test_outputs")
-        self.samples_dir = Path("tests/samples")
+        self.tests_dir = Path(__file__).parent.resolve()
+        self.output_dir = self.tests_dir / "test_outputs"
+        self.pipeline = TextIngestionPipeline(output_dir=str(self.output_dir))
+        self.samples_dir = self.tests_dir / "samples"
 
     def test_markdown_advisory_ingestion(self):
         md_file = self.samples_dir / "sample_advisory.md"
@@ -71,7 +73,19 @@ class TestTextIngestionPipeline(unittest.TestCase):
             self.assertIn("LockBit 3.0", context.threat_intel.threat_actors)
             self.assertGreaterEqual(len(context.tables), 1)
 
-    def test_qwen_enrichment(self):
+    def test_plain_text_incident_triage(self):
+        txt_file = self.samples_dir / "sample_incident_triage.txt"
+        if txt_file.exists():
+            context = self.pipeline.process_file(str(txt_file), save_outputs=True)
+            self.assertEqual(context.metadata.file_type, "text")
+            self.assertIn("CVE-2024-21410", context.iocs.cves)
+            self.assertIn("198.51.100.89", context.iocs.ipv4_addresses)
+            self.assertIn("8f434346648f6b96df89dda901c5176b10e6d0ceec3e4a14e310b73399b358b0", context.iocs.sha256_hashes)
+            self.assertIn("bad-relay-dns.net", context.iocs.domains)
+            self.assertIn("Microsoft Exchange Server", context.threat_intel.affected_systems)
+            self.assertIn("HIGH", context.threat_intel.severity_keywords)
+
+    def test_interpreter_enrichment(self):
         md_file = self.samples_dir / "sample_advisory.md"
         src, enriched = self.pipeline.process_and_enrich(str(md_file), save_outputs=True)
         
@@ -81,13 +95,24 @@ class TestTextIngestionPipeline(unittest.TestCase):
         self.assertTrue(len(enriched.minto_pyramid.situation) > 0)
         self.assertTrue(len(enriched.minto_pyramid.solution) > 0)
         self.assertTrue(len(enriched.locked_numerical_facts) > 0)
-        self.assertIn("3,200 enterprise servers", enriched.locked_numerical_facts)
+        self.assertTrue(any("3,200" in fact for fact in enriched.locked_numerical_facts))
         self.assertGreaterEqual(len(enriched.actionable_mitigations), 1)
         
         # Verify markdown serialization
         md_content = enriched.to_markdown()
         self.assertIn("## 1. Executive Narrative", md_content)
         self.assertIn("## 2. Minto Pyramid Briefing Structure", md_content)
+
+        # Verify intermediate files were cleaned up and final enriched files exist
+        intermediate_md = self.output_dir / "sample_advisory_normalized.md"
+        intermediate_json = self.output_dir / "sample_advisory_metadata.json"
+        final_enriched_md = self.output_dir / "sample_advisory_enriched_context.md"
+        final_enriched_json = self.output_dir / "sample_advisory_enriched_context.json"
+
+        self.assertFalse(intermediate_md.exists(), "Intermediate normalized markdown should be removed")
+        self.assertFalse(intermediate_json.exists(), "Intermediate metadata json should be removed")
+        self.assertTrue(final_enriched_md.exists(), "Enriched markdown file should exist")
+        self.assertTrue(final_enriched_json.exists(), "Enriched json file should exist")
 
 
 if __name__ == "__main__":

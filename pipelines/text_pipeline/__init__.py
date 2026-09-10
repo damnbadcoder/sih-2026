@@ -1,11 +1,8 @@
 """
-Pipelines root package for multi-modal cybersecurity content ingestion & transformation.
-
-Modalities:
-- text_pipeline: Documents (PDF, DOCX, MD, TXT, LOG, CSV, JSON), IOC extraction, table parsing, LLM Minto grounding
-- image_pipeline: Visual forensics, threat diagrams, keyframe OCR, and vision model captioning
-- video_pipeline: Incident briefing videos, terminal screencast keyframe sampling, Whisper audio split
-- audio_pipeline: Incident triage calls, podcast intelligence, Faster-Whisper timestamped transcription
+Text Ingestion & Semantic Interpretation Pipeline.
+Ingests heterogeneous text documents (PDF, DOCX, MD, TXT, LOG, CSV, JSON),
+extracts deterministic IOCs, preserves table structures, processes embedded image OCR,
+and provides LLM-based Minto Pyramid grounding anchors.
 """
 
 from pipelines.text_pipeline.schema import (

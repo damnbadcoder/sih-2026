@@ -134,7 +134,7 @@ class EnrichedGroundingContext(BaseModel):
     actionable_mitigations: List[str] = Field(default_factory=list, description="Ordered immediate, tactical, and strategic mitigations")
     threat_metadata: ThreatMetadata
     downstream_directives: DownstreamDirectives
-    interpreted_by_model: str = Field(default="qwen/qwen3.6-27b")
+    interpreted_by_model: str = Field(default="groq-model", description="Model identifier used for semantic grounding")
     generated_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
     def to_dict(self) -> Dict[str, Any]:

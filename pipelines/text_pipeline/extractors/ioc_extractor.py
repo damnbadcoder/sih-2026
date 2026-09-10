@@ -7,7 +7,7 @@ with zero loss pre-LLM injection.
 import re
 import ipaddress
 from typing import List, Dict, Any, Tuple
-from pipelines.schema import ExtractedIOCs, ThreatIntelSummary
+from pipelines.text_pipeline.schema import ExtractedIOCs, ThreatIntelSummary
 
 
 # --- Deterministic Regex Patterns ---

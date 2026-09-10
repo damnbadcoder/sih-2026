@@ -18,19 +18,19 @@ from dotenv import load_dotenv
 # Automatically load environment variables from .env file
 load_dotenv()
 
-from pipelines.schema import (
+from pipelines.text_pipeline.schema import (
     DocumentMetadata,
     ExtractedSourceContext,
     ExtractedIOCs,
     ThreatIntelSummary,
     EnrichedGroundingContext,
 )
-from pipelines.extractors.pdf_parser import PDFParser
-from pipelines.extractors.docx_parser import DocxParser
-from pipelines.extractors.text_parser import TextParser
-from pipelines.extractors.ioc_extractor import IOCExtractor
-from pipelines.chunking import build_llm_injection_bundle, estimate_tokens
-from pipelines.interpreters.qwen_interpreter import QwenGroqInterpreter
+from pipelines.text_pipeline.extractors.pdf_parser import PDFParser
+from pipelines.text_pipeline.extractors.docx_parser import DocxParser
+from pipelines.text_pipeline.extractors.text_parser import TextParser
+from pipelines.text_pipeline.extractors.ioc_extractor import IOCExtractor
+from pipelines.text_pipeline.chunking import build_llm_injection_bundle, estimate_tokens
+from pipelines.text_pipeline.interpreters.interpreter import GroqInterpreter, Interpreter
 
 
 def calculate_sha256(file_path: str) -> str:
@@ -66,7 +66,7 @@ class TextIngestionPipeline:
         self.docx_parser = DocxParser()
         self.text_parser = TextParser()
         self.ioc_extractor = IOCExtractor()
-        self.interpreter = QwenGroqInterpreter()
+        self.interpreter = GroqInterpreter()
 
     def process_file(
         self,
@@ -174,15 +174,28 @@ class TextIngestionPipeline:
         save_outputs: bool = True
     ) -> Tuple[ExtractedSourceContext, EnrichedGroundingContext]:
         """
-        Runs both Ingestion (Phase 1) and Qwen Semantic Interpretation (Phase 2).
-        Produces normalized Markdown + metadata JSON, AND enriched Markdown + enriched JSON.
+        Runs both Ingestion (Phase 1) and Semantic Interpretation (Phase 2).
+        Produces enriched Markdown + enriched JSON, and automatically cleans up
+        temporary intermediate Phase 1 files.
         """
-        source_context = self.process_file(file_path, output_dir=output_dir, save_outputs=save_outputs)
+        target_dir = Path(output_dir) if output_dir else self.output_dir
+        source_context = self.process_file(file_path, output_dir=str(target_dir), save_outputs=save_outputs)
         enriched_context = self.interpreter.interpret(
             source_context=source_context,
-            output_dir=output_dir or str(self.output_dir),
+            output_dir=str(target_dir),
             save_outputs=save_outputs
         )
+
+        # Remove temporary intermediate Phase 1 files once enriched outputs are ready
+        if save_outputs:
+            stem = Path(file_path).stem
+            for temp_file in [target_dir / f"{stem}_normalized.md", target_dir / f"{stem}_metadata.json"]:
+                if temp_file.exists():
+                    try:
+                        temp_file.unlink()
+                    except OSError:
+                        pass
+
         return source_context, enriched_context
 
     def process_batch(
@@ -206,7 +219,7 @@ class TextIngestionPipeline:
 def main():
     """Command-line interface for the ingestion and Qwen interpretation pipeline."""
     parser = argparse.ArgumentParser(
-        description="Deterministic Text Ingestion & Qwen Semantic Interpretation Pipeline"
+        description="Deterministic Text Ingestion & Semantic Interpretation Pipeline"
     )
     parser.add_argument(
         "--input", "-i",
@@ -221,7 +234,7 @@ def main():
     parser.add_argument(
         "--enrich", "-e",
         action="store_true",
-        help="Run Qwen 3.6 27B on Groq to extract rich semantic grounding context (.md and .json)"
+        help="Run Groq LLM interpreter to extract rich semantic grounding context (.md and .json)"
     )
     parser.add_argument(
         "--print-summary", "-s",
@@ -255,10 +268,9 @@ def main():
 
         if args.enrich:
             context, enriched = pipeline.process_and_enrich(fp, output_dir=args.output_dir, save_outputs=True)
-            print(f"    [+] Saved normalized Markdown: {args.output_dir}/{stem}_normalized.md")
-            print(f"    [+] Saved metadata JSON:       {args.output_dir}/{stem}_metadata.json")
             print(f"    [+] Saved enriched Markdown:   {args.output_dir}/{stem}_enriched_context.md")
             print(f"    [+] Saved enriched JSON:       {args.output_dir}/{stem}_enriched_context.json")
+            print(f"    [i] Cleaned up temporary Phase 1 intermediate files.")
         else:
             context = pipeline.process_file(fp, output_dir=args.output_dir, save_outputs=True)
             enriched = None
@@ -280,7 +292,7 @@ def main():
             print(f"Domains / URLs: {context.iocs.domains + context.iocs.urls}")
 
             if enriched:
-                print("\n--- QWEN ENRICHED GROUNDING ANCHOR ---")
+                print("\n--- ENRICHED GROUNDING ANCHOR ---")
                 print(f"Title: {enriched.title}")
                 print(f"Minto Situation:   {enriched.minto_pyramid.situation}")
                 print(f"Minto Complication:{enriched.minto_pyramid.complication}")

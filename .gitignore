@@ -219,4 +219,5 @@ __marimo__/
 
 # Pipeline Ingestion Output Artifacts
 ingestion_outputs/
-tests/test_outputs/
+**/test_outputs/
+

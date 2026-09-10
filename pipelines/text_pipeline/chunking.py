@@ -5,7 +5,7 @@ Prepares normalized markdown and metadata into high-fidelity LLM prompts and chu
 
 import re
 from typing import List, Optional
-from pipelines.schema import (
+from pipelines.text_pipeline.schema import (
     ExtractedIOCs,
     ThreatIntelSummary,
     TableData,
