@@ -175,6 +175,70 @@ label { display: flex; flex-direction: column; gap: 6px; color: var(--muted); fo
 .user-chip { color: var(--muted); font-size: 13px; }
 .user-chip em { color: var(--accent); font-style: normal; }
 
+/* ---- stage stepper ---- */
+.stage-stepper {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 4px 10px;
+}
+.step-node {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  background: transparent;
+  border: none;
+  padding: 5px 10px;
+  border-radius: 999px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 500;
+  transition: all 0.15s ease;
+}
+.step-node .step-num {
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--border);
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+}
+.step-node.completed {
+  color: var(--text);
+  cursor: pointer;
+}
+.step-node.completed:hover {
+  background: rgba(255, 255, 255, 0.05);
+}
+.step-node.completed .step-num {
+  background: var(--accent-dim);
+  color: #fff;
+}
+.step-node.active {
+  color: var(--accent);
+  background: rgba(76, 195, 138, 0.12);
+  cursor: default;
+}
+.step-node.active .step-num {
+  background: var(--accent);
+  color: #06130c;
+}
+.step-node:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+.step-divider {
+  color: var(--border);
+  font-size: 10px;
+  user-select: none;
+}
+
 .workspace {
   display: grid;
   grid-template-columns: 220px minmax(400px, 480px) minmax(0, 1fr);
@@ -388,6 +452,8 @@ label { display: flex; flex-direction: column; gap: 6px; color: var(--muted); fo
 @media (max-width: 980px) {
   .auth { grid-template-columns: 1fr; }
   .auth-brand { padding: 40px; }
+  .topbar { flex-wrap: wrap; gap: 10px; }
+  .stage-stepper { order: 3; width: 100%; justify-content: center; margin-top: 4px; }
   .workspace { grid-template-columns: 1fr; }
   .sidebar, .col-input, .col-output { grid-column: auto; grid-row: auto; }
 }

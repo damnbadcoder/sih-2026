@@ -83,6 +83,7 @@ export default function Dashboard() {
     (d) => d.outputType === activeId
   );
   const isPreviewStage = (Object.keys(previewsByType).length > 0 || planning) && !gen;
+  const currentStage: 1 | 2 | 3 = gen ? 3 : isPreviewStage ? 2 : 1;
   const activeParamId: OutputTypeId | null =
     openParams && selected.has(openParams)
       ? openParams
@@ -96,6 +97,27 @@ export default function Dashboard() {
       : selected.size > 0
       ? Array.from(selected)[0]
       : null;
+
+  function goToStep1() {
+    setGen(null);
+    setPreviewsByType({});
+    setActivePreviewId(null);
+  }
+
+  function goToStep2() {
+    if (currentStage === 1) {
+      createPreview();
+    } else if (currentStage === 3 && gen) {
+      if (gen.previewsByType && Object.keys(gen.previewsByType).length > 0) {
+        setPreviewsByType(gen.previewsByType);
+        setActivePreviewId(Array.from(selected)[0] ?? null);
+        setPreviewCitations(gen.citations);
+      } else {
+        createPreview();
+      }
+      setGen(null);
+    }
+  }
 
   function paramsFor(id: OutputTypeId): GenerationParams {
     return paramsByType[id] ?? copyParams(DEFAULT_PARAMS);
@@ -303,6 +325,37 @@ export default function Dashboard() {
     <div className="app">
       <header className="topbar">
         <div className="brand"><span className="logo-mark sm">⌁</span> Transmute</div>
+
+        <nav className="stage-stepper" aria-label="Transformation Progress">
+          <button
+            type="button"
+            className={`step-node ${currentStage === 1 ? "active" : "completed"}`}
+            onClick={goToStep1}
+          >
+            <span className="step-num">1</span>
+            <span className="step-label">Ingest & Configure</span>
+          </button>
+          <span className="step-divider" aria-hidden="true">→</span>
+          <button
+            type="button"
+            className={`step-node ${currentStage === 2 ? "active" : currentStage > 2 ? "completed" : "pending"}`}
+            onClick={goToStep2}
+            disabled={currentStage === 1 && (selected.size === 0 || (!sourceText.trim() && !fileNames.length && !links.trim()))}
+          >
+            <span className="step-num">2</span>
+            <span className="step-label">Blueprint Approval</span>
+          </button>
+          <span className="step-divider" aria-hidden="true">→</span>
+          <button
+            type="button"
+            className={`step-node ${currentStage === 3 ? "active" : "pending"}`}
+            disabled={!gen}
+          >
+            <span className="step-num">3</span>
+            <span className="step-label">Deliverables</span>
+          </button>
+        </nav>
+
         <div className="topbar-right">
           <span className="user-chip">{user.name} · <em>{user.userType}</em></span>
           <button className="ghost sm" onClick={logout}>Sign out</button>
