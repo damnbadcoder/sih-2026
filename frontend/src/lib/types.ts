@@ -164,7 +164,8 @@ export interface Generation {
   fileNames: string[];
   links: string[];
   paramsByType: Record<OutputTypeId, GenerationParams>;
-  plan: string;
+  plan?: string;
+  previewsByType?: Partial<Record<OutputTypeId, string>>;
   citations: Citation[];
   deliverables: Deliverable[];
 }

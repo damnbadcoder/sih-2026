@@ -8,12 +8,164 @@ function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function buildFormatBlueprint(
+  id: OutputTypeId,
+  sourceText: string,
+  params: GenerationParams
+): string {
+  const snippet = sourceText.trim()
+    ? sourceText.trim().slice(0, 120).replace(/\n/g, " ") + "..."
+    : "Critical telemetry & system advisory events";
+
+  switch (id) {
+    case "advisory":
+      return `### Technical Advisory Blueprint · TA-2026
+**Target Audience:** ${params.targetAudience || "SOC Analysts, CERT Teams, CISO Staff"} (${params.audienceCategory})
+**Tone:** ${params.tone} | **Detail:** ${params.detail} | **Language:** ${params.language}
+**Objective:** ${params.objective}
+
+#### Planned Structure & Directives:
+1. **Severity & CVSS Score:** Assign priority CVSS 9.x rating based on ingested vector.
+2. **Context Summary:** Focus on: "${snippet}".
+3. **Attack Vector Analysis:** Map ingress vectors, perimeter bypass, and MITRE ATT&CK techniques.
+4. **Indicators of Compromise (IOCs):** Format verified IPs, SHA-256 hashes, and C2 domains into structured tables.
+5. **Mitigation Checklist:** Provide 3-step prioritized containment checklist for SOC engineers.
+
+*Feel free to edit this blueprint before proceeding with generation.*`;
+
+    case "exec_summary":
+      return `### Executive Brief Blueprint
+**Audience:** ${params.targetAudience || "Executive Leadership & Board Members"} (${params.audienceCategory})
+**Tone:** ${params.tone} | **Detail:** ${params.detail} | **Language:** ${params.language}
+**Objective:** ${params.objective}
+
+#### Planned Structure (Minto Pyramid):
+1. **Situation:** High-level operational overview & threat context ("${snippet}").
+2. **Complication:** Business impact, downtime risk, regulatory compliance exposure.
+3. **Strategic Solution:** Rapid containment actions taken and posture hardening.
+4. **ROI / Resource Allocation:** Decisions required from leadership regarding budget and security tooling.
+
+*Feel free to edit this blueprint before proceeding with generation.*`;
+
+    case "incident_report":
+      return `### Incident Triage & Forensic Report Blueprint
+**Audience:** ${params.targetAudience || "Incident Response & Forensics Team"} (${params.audienceCategory})
+**Tone:** ${params.tone} | **Detail:** ${params.detail} | **Language:** ${params.language}
+**Objective:** ${params.objective}
+
+#### Planned Structure:
+1. **Incident Telemetry:** Timeline reconstruction with exact timestamps (UTC).
+2. **Root Cause Analysis:** Telemetry analysis based on: "${snippet}".
+3. **Blast Radius & Affected Systems:** Scope of affected hosts, services, and credentials.
+4. **Remediation & Forensic Checklist:** Immediate containment status and verification audits.
+
+*Feel free to edit this blueprint before proceeding with generation.*`;
+
+    case "social_thread":
+      return `### Social / X Thread Blueprint
+**Audience:** ${params.targetAudience || "InfoSec Community & Developers"} (${params.audienceCategory})
+**Tone:** ${params.tone} | **Language:** ${params.language}
+**Objective:** ${params.objective}
+
+#### Planned Thread Breakdown:
+1. **Post 1 (Hook):** Urgent threat summary & alert banner.
+2. **Post 2 (The Exploit):** High-level breakdown of the vulnerability without jargon overload.
+3. **Post 3 (IOCs & Hashes):** Key indicators security teams can check immediately.
+4. **Post 4 (Defense Steps):** 3 actionable takeaway steps for sysadmins.
+5. **Post 5 (Wrap-up & CTA):** Official advisory link and community hashtags (#CyberSecurity #ThreatIntel).
+
+*Feel free to edit this blueprint before proceeding with generation.*`;
+
+    case "linkedin_post":
+      return `### LinkedIn Thought Leadership & Alert Blueprint
+**Audience:** ${params.targetAudience || "Tech Executives, CISOs, and SecOps Managers"} (${params.audienceCategory})
+**Tone:** ${params.tone} | **Language:** ${params.language}
+**Objective:** ${params.objective}
+
+#### Planned Post Composition:
+1. **Headline Hook:** Catchy opening line highlighting business & technical implications.
+2. **The Threat Context:** Crisp summary of the campaign based on: "${snippet}".
+3. **Actionable Takeaways:** 3 bullet points with clear takeaways for engineering managers.
+4. **Discussion Prompt & Hashtags:** Engaging question to drive discussion in comments.
+
+*Feel free to edit this blueprint before proceeding with generation.*`;
+
+    case "press_release":
+      return `### Public Security Advisory & Press Statement Blueprint
+**Audience:** ${params.targetAudience || "Public, Customers & Press Media"} (${params.audienceCategory})
+**Tone:** ${params.tone} | **Detail:** ${params.detail} | **Language:** ${params.language}
+**Objective:** ${params.objective}
+
+#### Planned Statement Structure:
+1. **Official Disclosure:** Clear, reassuring announcement of detected activity.
+2. **Customer Impact Statement:** Explicit confirmation regarding user data protection and safety.
+3. **Proactive Protections Applied:** Measures taken by engineering to secure the ecosystem.
+4. **User Guidance & Media Contacts:** Safe practices for end-users and PR contact details.
+
+*Feel free to edit this blueprint before proceeding with generation.*`;
+
+    case "slide_deck":
+      return `### Slide Deck Presentation Blueprint
+**Audience:** ${params.targetAudience || "Board of Directors & Security Committee"} (${params.audienceCategory})
+**Tone:** ${params.tone} | **Detail:** ${params.detail} | **Language:** ${params.language}
+**Objective:** ${params.objective}
+
+#### Planned Deck Slides:
+- **Slide 1:** Title, executive summary & threat classification.
+- **Slide 2:** Attack anatomy, entry vector & MITRE ATT&CK mapping.
+- **Slide 3:** Impact mitigation, zero-trust hardening roadmap & timeline.
+- *Speaker Notes Included:* Talking points and rationale for each slide.
+
+*Feel free to edit this blueprint before proceeding with generation.*`;
+
+    case "video_script":
+      return `### Video Narration Script Blueprint
+**Audience:** ${params.targetAudience || "Threat Intelligence Viewers & Analysts"} (${params.audienceCategory})
+**Tone:** ${params.tone} | **Detail:** ${params.detail} | **Language:** ${params.language}
+**Target Runtime:** 90 seconds | **Objective:** ${params.objective}
+
+#### Planned Scene Breakdown:
+- **Scene 1 (0:00 - 0:15):** Visual: Dark threat map graphic. Audio: Hook & alert introduction.
+- **Scene 2 (0:15 - 0:45):** Visual: Exploit sequence animation. Audio: Technical explanation of "${snippet}".
+- **Scene 3 (0:45 - 1:15):** Visual: 3 mitigation cards. Audio: Actionable defense recommendations.
+- **Scene 4 (1:15 - 1:30):** Visual: Outro banner & URL. Audio: Call to action and advisory reference.
+
+*Feel free to edit this blueprint before proceeding with generation.*`;
+
+    case "playbook":
+      return `### Remediation Playbook Blueprint
+**Audience:** ${params.targetAudience || "Tier 2/3 SOC Engineers & Sysadmins"} (${params.audienceCategory})
+**Tone:** ${params.tone} | **Detail:** ${params.detail} | **Language:** ${params.language}
+**Objective:** ${params.objective}
+
+#### Planned Playbook Stages:
+1. **Stage 1 (Verification):** Telemetry queries and IOC validation.
+2. **Stage 2 (Containment):** Isolation commands, firewall rules, and session revocation.
+3. **Stage 3 (Eradication & Recovery):** Re-imaging procedures, hash baseline checks, and key rotation.
+4. **Stage 4 (Post-Incident):** Log retention audit and detection rule updates.
+
+*Feel free to edit this blueprint before proceeding with generation.*`;
+
+    default:
+      return `### Custom Deliverable Blueprint · ${id}
+**Audience:** ${params.targetAudience || params.audienceCategory}
+**Tone:** ${params.tone} | **Detail:** ${params.detail} | **Language:** ${params.language}
+**Objective:** ${params.objective}
+
+Generated based on: "${snippet}".`;
+  }
+}
+
 export async function generatePlan(
   sourceText: string,
   fileNames: string[],
   links: string[],
   outputs: { id: OutputTypeId; params: GenerationParams }[]
-): Promise<{ plan: string; citations: Citation[] }> {
+): Promise<{
+  plan: string;
+  previewsByType: Record<OutputTypeId, string>;
+  citations: Citation[];
+}> {
   await sleep(600);
 
   const citations: Citation[] = [];
@@ -52,26 +204,29 @@ export async function generatePlan(
     }
   }
 
-  const plan = `### Grounding Transformation Plan
+  const previewsByType: Record<OutputTypeId, string> = {} as Record<
+    OutputTypeId,
+    string
+  >;
 
-**Context Analysis:**
-- **Source Modalities:** ${fileNames.length ? `${fileNames.length} attached file(s), ` : ""}${links.length ? `${links.length} external intelligence link(s), ` : ""}direct narrative text (${sourceText.trim().length} chars).
-- **Target Deliverables:** ${outputs.map((o) => o.id).join(", ")}
+  for (const out of outputs) {
+    previewsByType[out.id] = buildFormatBlueprint(
+      out.id,
+      sourceText,
+      out.params
+    );
+  }
 
-**Execution Directives:**
-1. **Fact Locking:** Canonical anchor extracted for threat actors, CVEs, IOCs, and timelines to prevent multi-agent hallucination.
-2. **Audience Alignment:** Enforcing tone (${outputs[0]?.params.tone || "Authoritative"}) and detail level (${outputs[0]?.params.detail || "Standard"}).
-3. **Citation Tagging:** Every technical claim will reference verified source entities.
+  const defaultPlan = outputs.length > 0 ? previewsByType[outputs[0].id] : "";
 
-*Feel free to edit this blueprint before proceeding with generation.*`;
-
-  return { plan, citations };
+  return { plan: defaultPlan, previewsByType, citations };
 }
 
 export async function generateDeliverable(
   id: OutputTypeId,
   sourceText: string,
-  params: GenerationParams
+  params: GenerationParams,
+  blueprint?: string
 ): Promise<string> {
   await sleep(700);
 
@@ -117,7 +272,7 @@ An ongoing cyber campaign has been detected exploiting vulnerabilities in perime
       return `# Executive Brief: Cybersecurity Incident & Risk Assessment
 **Date:** ${dateStr}  
 **Classification:** STRICTLY CONFIDENTIAL  
-**Prepared For:** Executive Board & C-Suite  
+**Prepared For:** ${params.targetAudience || "Executive Board & C-Suite"}  
 
 ---
 
@@ -321,7 +476,7 @@ We remain committed to maintaining the highest security standards and open commu
 **Audience:** ${params.audienceCategory}  
 **Tone:** ${params.tone}  
 
-Generated analysis based on provided intelligence sources.`;
+Generated analysis based on provided intelligence sources.${blueprint ? `\n\n*Aligned with custom blueprint directives.*` : ""}`;
   }
 }
 

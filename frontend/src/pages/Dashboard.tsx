@@ -66,7 +66,8 @@ export default function Dashboard() {
   const [planning, setPlanning] = useState(false);
   const [generating, setGenerating] = useState(false);
   const [genError, setGenError] = useState("");
-  const [preview, setPreview] = useState("");
+  const [previewsByType, setPreviewsByType] = useState<Partial<Record<OutputTypeId, string>>>({});
+  const [activePreviewId, setActivePreviewId] = useState<OutputTypeId | null>(null);
   const [previewCitations, setPreviewCitations] = useState<Citation[]>([]);
   const [gen, setGen] = useState<Generation | null>(null);
   const [activeId, setActiveId] = useState<OutputTypeId | null>(null);
@@ -81,7 +82,20 @@ export default function Dashboard() {
   const active: Deliverable | undefined = gen?.deliverables.find(
     (d) => d.outputType === activeId
   );
-  const isPreviewStage = Boolean(preview) && !gen;
+  const isPreviewStage = (Object.keys(previewsByType).length > 0 || planning) && !gen;
+  const activeParamId: OutputTypeId | null =
+    openParams && selected.has(openParams)
+      ? openParams
+      : selected.size > 0
+      ? Array.from(selected)[0]
+      : null;
+
+  const currentPreviewId: OutputTypeId | null =
+    activePreviewId && selected.has(activePreviewId)
+      ? activePreviewId
+      : selected.size > 0
+      ? Array.from(selected)[0]
+      : null;
 
   function paramsFor(id: OutputTypeId): GenerationParams {
     return paramsByType[id] ?? copyParams(DEFAULT_PARAMS);
@@ -99,10 +113,20 @@ export default function Dashboard() {
       const next = new Set(prev);
       if (next.has(id)) {
         next.delete(id);
-        setOpenParams((current) => (current === id ? null : current));
+        if (openParams === id) {
+          const remaining = Array.from(next);
+          setOpenParams(remaining.length > 0 ? remaining[0] : null);
+        }
+        if (activePreviewId === id) {
+          const remaining = Array.from(next);
+          setActivePreviewId(remaining.length > 0 ? remaining[0] : null);
+        }
       } else {
         next.add(id);
         setOpenParams(id);
+        if (!activePreviewId) {
+          setActivePreviewId(id);
+        }
       }
       return next;
     });
@@ -138,12 +162,22 @@ export default function Dashboard() {
         sourceLinks,
         Array.from(selected).map((id) => ({ id, params: paramsFor(id) }))
       );
-      setPreview(result.plan);
+      setPreviewsByType(result.previewsByType);
+      const first = Array.from(selected)[0];
+      setActivePreviewId(first);
       setPreviewCitations(result.citations);
       setGen(null);
     } finally {
       setPlanning(false);
     }
+  }
+
+  function updateActivePreview(text: string) {
+    if (!currentPreviewId) return;
+    setPreviewsByType((prev) => ({
+      ...prev,
+      [currentPreviewId]: text,
+    }));
   }
 
   async function finalizeGeneration() {
@@ -159,7 +193,8 @@ export default function Dashboard() {
       paramsByType: Object.fromEntries(
         Array.from(selected).map((id) => [id, paramsFor(id)])
       ) as Record<OutputTypeId, GenerationParams>,
-      plan: preview,
+      previewsByType: { ...previewsByType },
+      plan: currentPreviewId ? previewsByType[currentPreviewId] : "",
       citations: previewCitations,
       deliverables: [],
     };
@@ -167,7 +202,12 @@ export default function Dashboard() {
     try {
       const first = selected.values().next().value as OutputTypeId;
       for (const id of selected) {
-        const content = await generateDeliverable(id, sourceText, paramsFor(id));
+        const content = await generateDeliverable(
+          id,
+          sourceText,
+          paramsFor(id),
+          previewsByType[id]
+        );
         g.deliverables.push({ outputType: id, content, retries: 0 });
         setGen({ ...g, deliverables: [...g.deliverables] });
         if (id === first) setActiveId(id);
@@ -176,7 +216,8 @@ export default function Dashboard() {
       const nextHistory = [done, ...history].slice(0, 20);
       setHistory(nextHistory);
       localStorage.setItem(HISTORY_KEY, JSON.stringify(nextHistory));
-      setPreview("");
+      setPreviewsByType({});
+      setActivePreviewId(null);
       setPreviewCitations([]);
       setOpenParams(null);
     } catch {
@@ -209,7 +250,8 @@ export default function Dashboard() {
 
   function openHistory(item: Generation) {
     setGen(item);
-    setPreview(item.plan);
+    setPreviewsByType({});
+    setActivePreviewId(null);
     setPreviewCitations(item.citations);
     setActiveId(item.deliverables[0]?.outputType ?? null);
     setSelected(new Set(item.deliverables.map((d) => d.outputType)));
@@ -263,7 +305,7 @@ export default function Dashboard() {
         <div className="brand"><span className="logo-mark sm">⌁</span> Transmute</div>
         <div className="topbar-right">
           <span className="user-chip">{user.name} · <em>{user.userType}</em></span>
-          <button className="ghost" onClick={logout}>Sign out</button>
+          <button className="ghost sm" onClick={logout}>Sign out</button>
         </div>
       </header>
 
@@ -314,73 +356,319 @@ export default function Dashboard() {
           <div className="card output-grid">
             {OUTPUT_TYPES.map((type) => {
               const chosen = selected.has(type.id);
-              const configured = openParams === type.id;
+              const configuring = chosen && activeParamId === type.id;
               return (
-                <button key={type.id} className={`output-tile ${chosen ? "on" : ""} ${configured ? "configuring" : ""}`} onClick={() => toggleOutput(type.id)}>
-                  <strong>{type.label}</strong><span>{type.hint}</span>
-                  {chosen && <small>{configured ? "Editing parameters" : "Selected"}</small>}
+                <button
+                  key={type.id}
+                  className={`output-tile ${chosen ? "on" : ""} ${configuring ? "configuring" : ""}`}
+                  onClick={() => toggleOutput(type.id)}
+                >
+                  <strong>{type.label}</strong>
+                  <span>{type.hint}</span>
+                  {chosen && <small>{configuring ? "Configuring" : "Selected"}</small>}
                 </button>
               );
             })}
           </div>
-          {!preview && (
+          {!isPreviewStage && !gen && (
             <button className="primary generate" onClick={createPreview} disabled={planning}>
               {planning ? "Preparing preview…" : `Create editable preview${selected.size ? ` · ${selected.size} output${selected.size === 1 ? "" : "s"}` : ""}`}
+            </button>
+          )}
+          {gen && (
+            <button className="ghost generate" onClick={() => { setGen(null); setPreviewsByType({}); setActivePreviewId(null); }}>
+              + Start new transformation
             </button>
           )}
           {genError && <p className="form-error">{genError}</p>}
         </main>
 
         <section className="col-output">
-          {isPreviewStage && (
+          {/* STAGE 1: Parameters beside Source Content (Visible before preview is requested) */}
+          {!gen && !isPreviewStage && (
             <>
-              <h2 className="col-title">Preview before delivery</h2>
-              <div className="card preview-card">
-                <div className="preview-toolbar">
-                  <span className="muted">Editable model instructions</span>
-                  <button className="ghost" onClick={() => setPreview("")}>Back to setup</button>
-                </div>
-                <textarea className="md-editor preview-editor" value={preview} onChange={(e) => setPreview(e.target.value)} />
-                <div className="citation-box">
-                  <strong>Suggested citations</strong>
-                  <p className="muted">Reference these sources when a claim is included in the final output.</p>
-                  <div className="citation-list">{previewCitations.map((citation) => <span key={citation.id} className="citation-chip">{citation.kind === "file" ? "▣" : citation.kind === "link" ? "↗" : "¶"} {citation.label}</span>)}</div>
-                </div>
-                <button className="primary" onClick={finalizeGeneration} disabled={generating}>{generating ? "Sending to model…" : "Done — generate deliverables"}</button>
+              <div className="section-header">
+                <h2 className="col-title">
+                  3 · Parameters {activeParamId ? `— ${outputTypeLabel(activeParamId)}` : ""}
+                </h2>
               </div>
+
+              {selected.size === 0 ? (
+                <div className="card empty">
+                  <p>No output types selected.</p>
+                  <p className="muted">
+                    Select one or more output types in Step 2 to configure audience, tone, detail level, and language.
+                  </p>
+                </div>
+              ) : (
+                <>
+                  {selected.size > 1 && (
+                    <div className="tabs param-tabs" role="tablist">
+                      {Array.from(selected).map((id) => (
+                        <button
+                          key={id}
+                          role="tab"
+                          aria-selected={id === activeParamId}
+                          className={id === activeParamId ? "on" : ""}
+                          onClick={() => setOpenParams(id)}
+                        >
+                          {outputTypeLabel(id)}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+
+                  {activeParamId && (
+                    <div className="card param-grid">
+                      <label>
+                        Audience category
+                        <select
+                          value={paramsFor(activeParamId).audienceCategory}
+                          onChange={(e) =>
+                            updateParams(activeParamId, {
+                              audienceCategory: e.target.value as GenerationParams["audienceCategory"],
+                            })
+                          }
+                        >
+                          {AUDIENCE_CATEGORIES.map((item) => (
+                            <option key={item.id} value={item.id}>
+                              {item.label}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                      <label>
+                        Target audience <span className="opt">(optional)</span>
+                        <input
+                          placeholder="e.g. bank CISOs, district collectors"
+                          value={paramsFor(activeParamId).targetAudience}
+                          onChange={(e) =>
+                            updateParams(activeParamId, { targetAudience: e.target.value })
+                          }
+                        />
+                      </label>
+                      <label>
+                        Tone
+                        <select
+                          value={paramsFor(activeParamId).tone}
+                          onChange={(e) =>
+                            updateParams(activeParamId, {
+                              tone: e.target.value as GenerationParams["tone"],
+                            })
+                          }
+                        >
+                          {TONES.map((tone) => (
+                            <option key={tone} value={tone}>
+                              {tone}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                      <label>
+                        Level of detail
+                        <select
+                          value={paramsFor(activeParamId).detail}
+                          onChange={(e) =>
+                            updateParams(activeParamId, {
+                              detail: e.target.value as GenerationParams["detail"],
+                            })
+                          }
+                        >
+                          {DETAIL_LEVELS.map((detail) => (
+                            <option key={detail} value={detail}>
+                              {detail}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                      <label>
+                        Objective
+                        <select
+                          value={paramsFor(activeParamId).objective}
+                          onChange={(e) =>
+                            updateParams(activeParamId, {
+                              objective: e.target.value as GenerationParams["objective"],
+                            })
+                          }
+                        >
+                          {OBJECTIVES.map((objective) => (
+                            <option key={objective} value={objective}>
+                              {objective}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                      <label>
+                        Language
+                        <select
+                          value={paramsFor(activeParamId).language}
+                          onChange={(e) =>
+                            updateParams(activeParamId, { language: e.target.value })
+                          }
+                        >
+                          {LANGUAGES.map((language) => (
+                            <option key={language} value={language}>
+                              {language}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                    </div>
+                  )}
+                </>
+              )}
             </>
           )}
 
-          {!gen && !isPreviewStage && !planning && <div className="card empty"><p>No deliverables yet.</p><p className="muted">Create a preview to review what the model will do before delivery.</p></div>}
-          {planning && <div className="card empty"><p className="pulse">Analysing source and preparing an editable preview…</p></div>}
+          {/* STAGE 2: Editable Preview (Visible after clicking 'Create editable preview') */}
+          {isPreviewStage && (
+            <>
+              <div className="section-header">
+                <h2 className="col-title">
+                  3 · Editable Preview {currentPreviewId ? `— ${outputTypeLabel(currentPreviewId)}` : ""}
+                </h2>
+                {!planning && (
+                  <button
+                    className="ghost sm"
+                    onClick={() => {
+                      setPreviewsByType({});
+                      setActivePreviewId(null);
+                    }}
+                  >
+                    ← Back to parameters
+                  </button>
+                )}
+              </div>
 
+              {planning ? (
+                <div className="card empty">
+                  <p className="pulse">Analysing source context and synthesizing tailored blueprints…</p>
+                </div>
+              ) : (
+                <div className="card preview-card">
+                  {selected.size > 1 && (
+                    <div className="tabs param-tabs" role="tablist">
+                      {Array.from(selected).map((id) => (
+                        <button
+                          key={id}
+                          role="tab"
+                          aria-selected={id === currentPreviewId}
+                          className={id === currentPreviewId ? "on" : ""}
+                          onClick={() => setActivePreviewId(id)}
+                        >
+                          {outputTypeLabel(id)}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+
+                  <div className="preview-toolbar">
+                    <span className="muted">
+                      Tailored blueprint for <strong>{currentPreviewId ? outputTypeLabel(currentPreviewId) : "deliverable"}</strong>
+                    </span>
+                  </div>
+
+                  <textarea
+                    className="md-editor preview-editor"
+                    value={currentPreviewId ? previewsByType[currentPreviewId] ?? "" : ""}
+                    onChange={(e) => updateActivePreview(e.target.value)}
+                  />
+
+                  <div className="citation-box">
+                    <strong>Suggested citations</strong>
+                    <p className="muted">Reference these sources when claims are included in deliverables.</p>
+                    <div className="citation-list">
+                      {previewCitations.map((citation) => (
+                        <span key={citation.id} className="citation-chip">
+                          {citation.kind === "file" ? "▣" : citation.kind === "link" ? "↗" : "¶"} {citation.label}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+
+                  <button
+                    className="primary"
+                    onClick={finalizeGeneration}
+                    disabled={generating}
+                  >
+                    {generating
+                      ? "Generating deliverables…"
+                      : `Done — generate deliverables${selected.size > 1 ? ` (${selected.size} formats)` : ""}`}
+                  </button>
+                </div>
+              )}
+            </>
+          )}
+
+          {/* STAGE 3: Deliverables (Visible after final generation) */}
           {gen && (
             <>
-              <h2 className="col-title">Deliverables</h2>
-              <div className="result-meta"><span>{sourceSummary(gen)}</span><span className="muted">{new Date(gen.createdAt).toLocaleString()}</span></div>
-              <div className="tabs" role="tablist">{gen.deliverables.map((item) => <button key={item.outputType} role="tab" aria-selected={item.outputType === activeId} className={item.outputType === activeId ? "on" : ""} onClick={() => { setActiveId(item.outputType); setEditing(false); }}>{outputTypeLabel(item.outputType)}{item.retries > 0 && <sup>{item.retries}</sup>}</button>)}</div>
-              {active && <div className="card deliverable">
-                <div className="deliverable-toolbar">{editing ? <><button className="ghost" onClick={() => setEditing(false)}>Discard</button><button className="primary" onClick={acceptDraft}>Save changes</button></> : <><button className="ghost" onClick={() => { setDraft(active.content); setEditing(true); }}>Edit markdown</button><button className="ghost" onClick={copy}>{copied ? "Copied ✓" : "Copy"}</button><button className="ghost" onClick={download}>Download .md</button></>}</div>
-                {editing ? <textarea className="md-editor" value={draft} onChange={(e) => setDraft(e.target.value)} spellCheck={false} /> : <Markdown content={active.content} />}
-              </div>}
-              {active && !editing && <div className="card retry"><strong>Not satisfied?</strong><textarea placeholder="Describe what to change — e.g. “shorter, drop the jargon, add a call to action”" value={refinement} onChange={(e) => setRefinement(e.target.value)} rows={2} /><button className="primary" onClick={retry} disabled={retrying}>{retrying ? "Regenerating…" : "Retry with this instruction"}</button></div>}
+              <div className="section-header">
+                <h2 className="col-title">3 · Deliverables</h2>
+                <button
+                  className="ghost sm"
+                  onClick={() => {
+                    setGen(null);
+                    setPreviewsByType({});
+                    setActivePreviewId(null);
+                  }}
+                >
+                  + New transformation
+                </button>
+              </div>
+              <div className="result-meta">
+                <span>{sourceSummary(gen)}</span>
+                <span className="muted">{new Date(gen.createdAt).toLocaleString()}</span>
+              </div>
+              <div className="tabs" role="tablist">
+                {gen.deliverables.map((item) => (
+                  <button
+                    key={item.outputType}
+                    role="tab"
+                    aria-selected={item.outputType === activeId}
+                    className={item.outputType === activeId ? "on" : ""}
+                    onClick={() => { setActiveId(item.outputType); setEditing(false); }}
+                  >
+                    {outputTypeLabel(item.outputType)}
+                    {item.retries > 0 && <sup>{item.retries}</sup>}
+                  </button>
+                ))}
+              </div>
+              {active && (
+                <div className="card deliverable">
+                  <div className="deliverable-toolbar">
+                    {editing ? (
+                      <>
+                        <button className="ghost sm" onClick={() => setEditing(false)}>Discard</button>
+                        <button className="primary sm" onClick={acceptDraft}>Save changes</button>
+                      </>
+                    ) : (
+                      <>
+                        <button className="ghost sm" onClick={() => { setDraft(active.content); setEditing(true); }}>Edit markdown</button>
+                        <button className="ghost sm" onClick={copy}>{copied ? "Copied ✓" : "Copy"}</button>
+                        <button className="ghost sm" onClick={download}>Download .md</button>
+                      </>
+                    )}
+                  </div>
+                  {editing ? (
+                    <textarea className="md-editor" value={draft} onChange={(e) => setDraft(e.target.value)} spellCheck={false} />
+                  ) : (
+                    <Markdown content={active.content} />
+                  )}
+                </div>
+              )}
+              {active && !editing && (
+                <div className="card retry">
+                  <strong>Not satisfied?</strong>
+                  <textarea placeholder="Describe what to change — e.g. “shorter, drop the jargon, add a call to action”" value={refinement} onChange={(e) => setRefinement(e.target.value)} rows={2} />
+                  <button className="primary" onClick={retry} disabled={retrying}>
+                    {retrying ? "Regenerating…" : "Retry with this instruction"}
+                  </button>
+                </div>
+              )}
             </>
           )}
         </section>
-
-        {openParams && !gen && !preview && (
-          <section className="params-panel">
-            <div className="params-heading"><h2 className="col-title">Parameters · {outputTypeLabel(openParams)}</h2><button className="ghost" onClick={() => setOpenParams(null)}>Close</button></div>
-            <div className="card param-grid">
-              <label>Audience category<select value={paramsFor(openParams).audienceCategory} onChange={(e) => updateParams(openParams, { audienceCategory: e.target.value as GenerationParams["audienceCategory"] })}>{AUDIENCE_CATEGORIES.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}</select></label>
-              <label>Target audience <span className="opt">(optional)</span><input placeholder="e.g. bank CISOs, district collectors" value={paramsFor(openParams).targetAudience} onChange={(e) => updateParams(openParams, { targetAudience: e.target.value })} /></label>
-              <label>Tone<select value={paramsFor(openParams).tone} onChange={(e) => updateParams(openParams, { tone: e.target.value as GenerationParams["tone"] })}>{TONES.map((tone) => <option key={tone}>{tone}</option>)}</select></label>
-              <label>Level of detail<select value={paramsFor(openParams).detail} onChange={(e) => updateParams(openParams, { detail: e.target.value as GenerationParams["detail"] })}>{DETAIL_LEVELS.map((detail) => <option key={detail}>{detail}</option>)}</select></label>
-              <label>Objective<select value={paramsFor(openParams).objective} onChange={(e) => updateParams(openParams, { objective: e.target.value as GenerationParams["objective"] })}>{OBJECTIVES.map((objective) => <option key={objective}>{objective}</option>)}</select></label>
-              <label>Language<select value={paramsFor(openParams).language} onChange={(e) => updateParams(openParams, { language: e.target.value })}>{LANGUAGES.map((language) => <option key={language}>{language}</option>)}</select></label>
-            </div>
-          </section>
-        )}
       </div>
     </div>
   );
