@@ -1,39 +1,33 @@
-"""Stage 13 — normalization tests.
+"""Stage 13 — normalization unit tests.
 
-Covers the deterministic text normalizer, byte-bound truncation, record
-building, NDJSON serialization, and the end-to-end contract of the second
-``normalized_content`` artifact (content separation, no DB persistence, and
-failure cleanup).
+Coverage is independent of persistence: the deterministic text normalizer,
+UTF-8-safe truncation, record building, input ordering, and the incremental
+(in-memory) iterator that the future Stage 14 boundary will consume. An
+in-memory integration test exercises the Stage 12 (inspection) -> Stage 13
+(normalization) boundary for TXT/PDF/DOCX without writing normalized content
+to any artifact, database row, or storage path.
 """
 
 import io
-import json
 import uuid
 from collections.abc import AsyncIterator
 
 import pytest
-from httpx import ASGITransport, AsyncClient
-from sqlalchemy import delete, select
 
 from app.core.formats import MEDIA_CATEGORY_DOCUMENT, classify_format
-from app.db.session import async_session_factory
-from app.main import app
-from app.models.artifact import Artifact
 from app.models.input_file import InputFile
-from app.models.job import Job
-from app.models.user import User
-from app.processing import runner
-from app.processing.inspection import InspectionResult
-from app.processing.normalization import (
-    NORMALIZED_ARTIFACT_TYPE,
-    _truncate_to_utf8_bytes,
-    build_normalized_records,
-    normalize_text,
-    normalized_artifact_max_bytes,
-    serialize_normalized_records,
+from app.processing.inspection import (
+    DOCXInspector,
+    InspectionResult,
+    PDFInspector,
+    TextInspector,
+    get_inspector,
 )
-from app.processing.service import ProcessingError, process_job, reserve_job_for_processing
-from app.storage import StorageError, get_storage
+from app.processing.normalization import (
+    _truncate_to_utf8_bytes,
+    iter_normalized_records,
+    normalize_text,
+)
 from app.storage.local import LocalStorage
 
 try:
@@ -43,14 +37,6 @@ except ImportError:  # pragma: no cover
 
 _DOCX_MIME = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
 _PPTX_MIME = "application/vnd.openxmlformats-officedocument.presentationml.presentation"
-
-
-@pytest.fixture
-def storage(tmp_path) -> LocalStorage:
-    store = LocalStorage(tmp_path / "uploads")
-    app.dependency_overrides[get_storage] = lambda: store
-    yield store
-    app.dependency_overrides.pop(get_storage, None)
 
 
 # --- fixture builders --------------------------------------------------------
@@ -222,17 +208,34 @@ def test_truncate_zero_limit():
 # --- record building ----------------------------------------------------------
 
 
-def test_records_are_built_in_input_order():
+def test_iter_preserves_input_order():
     a = _result("b.pdf", text="second")
     b = _result("a.pdf", text="first")
-    records = build_normalized_records([b, a])
+    records = list(iter_normalized_records([b, a]))
     assert [r["original_filename"] for r in records] == ["a.pdf", "b.pdf"]
     assert records[0]["normalized_text"] == "first\n"
     assert records[1]["normalized_text"] == "second\n"
 
 
+def test_iter_consumes_incrementally_without_materializing():
+    results = [_result(f"f{i}.txt", text=f"text {i}") for i in range(5)]
+    pulled: list[int] = []
+
+    def source():
+        for index, result in enumerate(results):
+            pulled.append(index)
+            yield result
+
+    iterator = iter_normalized_records(source())
+    first = next(iterator)
+
+    assert first["original_filename"] == "f0.txt"
+    assert pulled == [0], "iterator must not pull the whole input upfront"
+    assert hasattr(iterator, "__next__")
+
+
 def test_record_fields_for_supported_file():
-    record = build_normalized_records([_result("paper.pdf", text="Hi\n")])[0]
+    record = list(iter_normalized_records([_result("paper.pdf", text="Hi\n")]))[0]
     assert record["supported_for_inspection"] is True
     assert record["normalized_char_count"] == len("Hi\n")
     assert record["truncated"] is False
@@ -260,7 +263,7 @@ def test_record_for_unsupported_file():
         file_size=8,
         storage_path=f"{uuid.uuid4()}/uploads/slides.pptx",
     )
-    record = build_normalized_records([InspectionResult.unsupported(file, classification)])[0]
+    record = list(iter_normalized_records([InspectionResult.unsupported(file, classification)]))[0]
     assert record["supported_for_inspection"] is False
     assert record["normalized_text"] is None
     assert record["normalized_char_count"] is None
@@ -268,180 +271,78 @@ def test_record_for_unsupported_file():
 
 
 def test_record_for_supported_but_empty_extraction():
-    record = build_normalized_records([_result("scan.pdf", text=None)])[0]
+    record = list(iter_normalized_records([_result("scan.pdf", text=None)]))[0]
     assert record["supported_for_inspection"] is True
     assert record["normalized_text"] is None
     assert record["reason"] == "no extractable text"
 
 
 def test_record_flags_truncated_output():
-    record = build_normalized_records(
-        [_result("big.txt", text="y" * 100)], cap_bytes=10
-    )[0]
+    record = list(iter_normalized_records([_result("big.txt", text="y" * 100)], cap_bytes=10))[0]
     assert record["truncated"] is True
     assert len(record["normalized_text"].encode("utf-8")) <= 10
 
 
 def test_record_within_cap_is_not_truncated():
-    record = build_normalized_records([_result("ok.txt", text="tiny")], cap_bytes=10)[0]
+    record = list(iter_normalized_records([_result("ok.txt", text="tiny")], cap_bytes=10))[0]
     assert record["truncated"] is False
     assert record["normalized_text"] == "tiny\n"
 
 
-# --- serialization ------------------------------------------------------------
+# --- in-memory Stage 12 -> Stage 13 boundary ----------------------------------
 
 
-async def _collect(chunks: AsyncIterator[bytes]) -> bytes:
-    return b"".join([c async for c in chunks])
+async def _bytes_chunks(data: bytes) -> AsyncIterator[bytes]:
+    yield data
 
 
-async def test_serializer_is_deterministic_sorted_ndjson():
-    records = build_normalized_records(
-        [_result("a.txt", text="one\n"), _result("b.txt", text="tw\u00e9\n")],
-        cap_bytes=100,
+def make_input_file(filename: str, content_type: str, data: bytes) -> InputFile:
+    return InputFile(
+        id=uuid.uuid4(),
+        job_id=uuid.uuid4(),
+        original_filename=filename,
+        stored_filename=f"stored_{filename}",
+        content_type=content_type,
+        file_size=len(data),
+        storage_path=f"{uuid.uuid4()}/input/{filename}",
     )
-    first = await _collect(serialize_normalized_records(records))
-    second = await _collect(serialize_normalized_records(records))
-    assert first == second
-
-    lines = first.splitlines()
-    assert len(lines) == 2
-    for line in lines:
-        parsed = json.loads(line)
-        assert list(parsed) == sorted(parsed)
-    assert "é" in lines[1].decode("utf-8")
 
 
-async def test_serializer_escapes_interior_newlines():
-    records = build_normalized_records([_result("m.txt", text="a\nb")], cap_bytes=100)
-    raw = await _collect(serialize_normalized_records(records))
-    assert len(raw.splitlines()) == 1
-    parsed = json.loads(raw.decode("utf-8"))
-    assert parsed["normalized_text"] == "a\nb\n"
+async def test_in_memory_boundary_normalizes_txt_pdf_docx(tmp_path):
+    storage = LocalStorage(tmp_path / "uploads")
 
+    txt_source = "  Alpha  \r\nBeta\t gamma\r\n\r\nLast.  "
+    pdf_data = build_pdf(["PDF line"])
+    docx_data = build_docx(["First line", "Second line"])
+    payloads = [
+        (txt_source.encode(), "text/plain", "notes.txt"),
+        (pdf_data, "application/pdf", "report.pdf"),
+        (docx_data, _DOCX_MIME, "memo.docx"),
+    ]
 
-async def test_serializer_leaks_no_storage_or_absolute_paths():
-    records = build_normalized_records([_result("p.pdf", text="ok")], cap_bytes=100)
-    text = (await _collect(serialize_normalized_records(records))).decode("utf-8")
-    assert "storage_path" not in text
-    assert "stored_filename" not in text
-    assert "/" not in text
-
-
-def test_artifact_guard_size_scales_with_record_count():
-    assert normalized_artifact_max_bytes(3) > normalized_artifact_max_bytes(1)
-
-
-# --- end-to-end integration ---------------------------------------------------
-
-
-CREATED_EMAILS: list[str] = []
-
-
-def unique_email(prefix: str) -> str:
-    return f"{prefix}-{uuid.uuid4().hex[:8]}@example.com"
-
-
-async def cleanup_created_users() -> None:
-    if not CREATED_EMAILS:
-        return
-    async with async_session_factory() as db:
-        await db.execute(delete(User).where(User.email.in_(CREATED_EMAILS)))
-        await db.commit()
-    CREATED_EMAILS.clear()
-
-
-@pytest.fixture
-async def client(storage):
-    transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://test") as ac:
-        yield ac
-    await cleanup_created_users()
-
-
-def _auth(token: str) -> dict[str, str]:
-    return {"Authorization": f"Bearer {token}"}
-
-
-async def _setup(client: AsyncClient) -> tuple[str, str, str]:
-    email = unique_email("norm")
-    CREATED_EMAILS.append(email)
-    signup = await client.post(
-        "/api/v1/auth/signup", json={"email": email, "password": "password123"}
-    )
-    assert signup.status_code == 201
-    user_id = signup.json()["id"]
-    login = await client.post(
-        "/api/v1/auth/login", json={"email": email, "password": "password123"}
-    )
-    assert login.status_code == 200
-    token = login.json()["access_token"]
-    created = await client.post("/api/v1/jobs", json={"config": {}}, headers=_auth(token))
-    assert created.status_code == 201
-    return user_id, token, created.json()["id"]
-
-
-async def _upload(
-    client: AsyncClient, token: str, job_id: str, filename, content, content_type
-) -> None:
-    resp = await client.post(
-        f"/api/v1/jobs/{job_id}/input",
-        files={"file": (filename, content, content_type)},
-        headers=_auth(token),
-    )
-    assert resp.status_code == 201
-
-
-async def _read_artifact_text(storage: LocalStorage, path: str) -> bytes:
-    return storage.resolve(path).read_bytes()
-
-
-async def _normalized_artifact_path(job_id: str) -> str:
-    async with async_session_factory() as db:
-        return await db.scalar(
-            select(Artifact.file_path).where(
-                Artifact.job_id == uuid.UUID(job_id),
-                Artifact.artifact_type == NORMALIZED_ARTIFACT_TYPE,
-            )
+    candidates = []
+    for data, content_type, filename in payloads:
+        input_file = make_input_file(filename, content_type, data)
+        await storage.save(
+            _bytes_chunks(data), input_file.storage_path, max_size=len(data) + 1
         )
+        candidates.append(input_file)
 
+    inspections = []
+    for input_file in candidates:
+        classification = classify_format(
+            input_file.original_filename, input_file.content_type
+        )
+        inspector = get_inspector(classification)
+        assert inspector is not None
+        inspections.append(await inspector.inspect(input_file, storage))
 
-async def _job_status(job_id: str) -> str:
-    async with async_session_factory() as db:
-        return await db.scalar(select(Job.status).where(Job.id == uuid.UUID(job_id)))
-
-
-async def test_processing_writes_normalized_and_summary_artifacts(
-    client: AsyncClient, storage: LocalStorage
-):
-    _, token, job_id = await _setup(client)
-    marker = f"NORM_MARKER_{uuid.uuid4().hex[:8]}"
-    source = f"  {marker}  \r\nBeta\t gamma\r\n\r\nLast.  "
-    await _upload(client, token, job_id, "notes.txt", source.encode(), "text/plain")
-    await _upload(client, token, job_id, "report.pdf", build_pdf(["PDF line"]), "application/pdf")
-
-    async with async_session_factory() as db:
-        await reserve_job_for_processing(db, uuid.UUID(job_id))
-        result = await process_job(uuid.UUID(job_id), db, storage)
-
-    assert await _job_status(job_id) == "completed"
-
-    summary = json.loads(await _read_artifact_text(storage, result.artifact_path))
-    assert summary["artifact_type"] == "processing_result"
-    assert marker not in json.dumps(summary)
-    assert "normalized_text" not in json.dumps(summary)
-
-    normalized_path = await _normalized_artifact_path(job_id)
-    assert normalized_path is not None
-    assert normalized_path != result.artifact_path
-    raw = await _read_artifact_text(storage, normalized_path)
-    assert marker in raw.decode("utf-8")
-    records = [json.loads(line) for line in raw.splitlines()]
-    assert [r["original_filename"] for r in records] == ["notes.txt", "report.pdf"]
+    records = list(iter_normalized_records(inspections))
+    assert [r["original_filename"] for r in records] == ["notes.txt", "report.pdf", "memo.docx"]
 
     notes = records[0]
-    assert notes["normalized_text"] == normalize_text(source)
-    assert notes["normalized_char_count"] == len(normalize_text(source))
+    assert notes["normalized_text"] == normalize_text(txt_source)
+    assert notes["normalized_char_count"] == len(normalize_text(txt_source))
     assert notes["truncated"] is False
     assert notes["reason"] is None
 
@@ -449,114 +350,38 @@ async def test_processing_writes_normalized_and_summary_artifacts(
     assert pdf["supported_for_inspection"] is True
     assert "PDF line" in pdf["normalized_text"]
 
-
-async def test_normalized_content_never_reaches_database(
-    client: AsyncClient, storage: LocalStorage
-):
-    _, token, job_id = await _setup(client)
-    marker = f"NORM_MARKER_{uuid.uuid4().hex[:8]}"
-    await _upload(client, token, job_id, "notes.txt", f"{marker} body\n".encode(), "text/plain")
-
-    async with async_session_factory() as db:
-        await reserve_job_for_processing(db, uuid.UUID(job_id))
-        await process_job(uuid.UUID(job_id), db, storage)
-
-    async with async_session_factory() as db:
-        artifacts = (
-            await db.scalars(select(Artifact).where(Artifact.job_id == uuid.UUID(job_id)))
-        ).all()
-        assert len(artifacts) == 2
-        for artifact in artifacts:
-            assert marker not in (artifact.artifact_type or "")
-            assert marker not in (artifact.file_path or "")
-        inputs = (
-            await db.scalars(select(InputFile).where(InputFile.job_id == uuid.UUID(job_id)))
-        ).all()
-        for input_file in inputs:
-            assert marker not in (input_file.storage_path or "")
-            assert marker not in (input_file.original_filename or "")
-        job = await db.scalar(select(Job).where(Job.id == uuid.UUID(job_id)))
-        assert marker.encode() not in (job.config or b"")
-
-    raw = await _read_artifact_text(storage, await _normalized_artifact_path(job_id))
-    assert marker in raw.decode("utf-8")
+    docx = records[2]
+    assert docx["supported_for_inspection"] is True
+    assert docx["normalized_text"] == "First line\nSecond line\n"
 
 
-async def test_processing_unsupported_format_record_reason(
-    client: AsyncClient, storage: LocalStorage
-):
-    _, token, job_id = await _setup(client)
-    await _upload(client, token, job_id, "slides.pptx", b"fake zip", _PPTX_MIME)
+@pytest.mark.skipif(_DocxDocument is None, reason="python-docx not installed")
+async def test_in_memory_boundary_includes_docx_inspector(tmp_path):
+    storage = LocalStorage(tmp_path / "uploads")
+    data = build_docx(["First", "Second"])
+    input_file = make_input_file("memo.docx", _DOCX_MIME, data)
+    await storage.save(_bytes_chunks(data), input_file.storage_path, max_size=len(data) + 1)
 
-    async with async_session_factory() as db:
-        await reserve_job_for_processing(db, uuid.UUID(job_id))
-        await process_job(uuid.UUID(job_id), db, storage)
+    result = await DOCXInspector().inspect(input_file, storage)
+    records = list(iter_normalized_records([result]))
 
-    raw = await _read_artifact_text(storage, await _normalized_artifact_path(job_id))
-    records = [json.loads(line) for line in raw.splitlines()]
-    assert len(records) == 1
-    record = records[0]
-    assert record["supported_for_inspection"] is False
-    assert record["normalized_text"] is None
-    assert record["reason"] == "no inspector registered for media category"
+    assert records[0]["original_filename"] == "memo.docx"
+    assert records[0]["normalized_text"] == "First\nSecond\n"
 
 
-async def test_processing_docx_normalized_content(
-    client: AsyncClient, storage: LocalStorage
-):
-    _, token, job_id = await _setup(client)
-    await _upload(
-        client,
-        token,
-        job_id,
-        "memo.docx",
-        build_docx(["First line", "Second line"]),
-        _DOCX_MIME,
-    )
+async def test_in_memory_boundary_includes_txt_and_pdf_inspectors(tmp_path):
+    storage = LocalStorage(tmp_path / "uploads")
+    txt = make_input_file("notes.txt", "text/plain", b"hello\r\nworld\n")
+    txt_data = b"hello\r\nworld\n"
+    await storage.save(_bytes_chunks(txt_data), txt.storage_path, max_size=len(txt_data) + 1)
+    pdf = make_input_file("report.pdf", "application/pdf", build_pdf(["Page one"]))
+    pdf_data = build_pdf(["Page one"])
+    await storage.save(_bytes_chunks(pdf_data), pdf.storage_path, max_size=len(pdf_data) + 1)
 
-    async with async_session_factory() as db:
-        await reserve_job_for_processing(db, uuid.UUID(job_id))
-        await process_job(uuid.UUID(job_id), db, storage)
+    txt_result = await TextInspector().inspect(txt, storage)
+    pdf_result = await PDFInspector().inspect(pdf, storage)
+    records = list(iter_normalized_records([txt_result, pdf_result]))
 
-    raw = await _read_artifact_text(storage, await _normalized_artifact_path(job_id))
-    records = [json.loads(line) for line in raw.splitlines()]
-    assert records[0]["normalized_text"] == "First line\nSecond line\n"
-
-
-async def test_storage_failure_on_normalized_save_fails_job_and_cleans_summary(
-    client: AsyncClient, storage: LocalStorage, monkeypatch
-):
-    class _FailNormalizedSaveStorage(LocalStorage):
-        def __init__(self, base_dir):
-            super().__init__(base_dir)
-            self.saves = 0
-
-        async def save(self, chunks, storage_path: str, *, max_size: int) -> int:
-            self.saves += 1
-            if self.saves == 2:
-                async for _ in chunks:
-                    pass
-                raise StorageError("simulated normalized content write failure")
-            return await super().save(chunks, storage_path, max_size=max_size)
-
-    _, token, job_id = await _setup(client)
-    await _upload(client, token, job_id, "a.txt", b"hello", "text/plain")
-
-    failing = _FailNormalizedSaveStorage(storage._base_dir)
-    monkeypatch.setattr(runner, "get_storage", lambda: failing)
-
-    with pytest.raises(ProcessingError):
-        async with async_session_factory() as db:
-            await reserve_job_for_processing(db, uuid.UUID(job_id))
-            await process_job(uuid.UUID(job_id), db, failing)
-
-    assert await _job_status(job_id) == "failed"
-    async with async_session_factory() as db:
-        count = len(
-            (
-                await db.scalars(
-                    select(Artifact).where(Artifact.job_id == uuid.UUID(job_id))
-                )
-            ).all()
-        )
-    assert count == 0
+    assert records[0]["normalized_text"] == "hello\nworld\n"
+    assert "Page one" in records[1]["normalized_text"]
+    assert pdf_result.metadata["page_count"] == 1

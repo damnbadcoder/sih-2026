@@ -13,12 +13,6 @@ from app.models.artifact import Artifact
 from app.models.input_file import InputFile
 from app.models.job import Job
 from app.processing.inspection import InspectionError, InspectionResult, get_inspector
-from app.processing.normalization import (
-    NORMALIZED_ARTIFACT_TYPE,
-    build_normalized_records,
-    normalized_artifact_max_bytes,
-    serialize_normalized_records,
-)
 from app.storage import Storage, StorageError
 
 logger = logging.getLogger(__name__)
@@ -193,20 +187,20 @@ async def _complete_job(
     db: AsyncSession,
     storage: Storage,
     job_id: uuid.UUID,
-    artifact_paths: list[tuple[str, str]],
+    artifact_path: str,
 ) -> Artifact:
-    """Mark a processing job completed and persist all its artifacts atomically.
+    """Persist the single ``processing_result`` artifact and complete the job.
 
-    ``artifact_paths`` is a list of ``(artifact_type, file_path)`` pairs. The
-    first entry is the primary artifact returned to callers. All rows are
-    committed in the same transaction as the status transition; on any failure
-    every freshly written artifact file is removed and the job is failed.
+    The artifact row is committed in the same transaction as the status
+    transition; on any failure the freshly written artifact file is removed and
+    the job is failed.
     """
-    artifacts = [
-        Artifact(job_id=job_id, artifact_type=artifact_type, file_path=path)
-        for artifact_type, path in artifact_paths
-    ]
-    db.add_all(artifacts)
+    artifact = Artifact(
+        job_id=job_id,
+        artifact_type=PROCESSING_ARTIFACT_TYPE,
+        file_path=artifact_path,
+    )
+    db.add(artifact)
     ensure_transition_allowed("processing", "completed")
     try:
         result = await db.execute(
@@ -219,22 +213,21 @@ async def _complete_job(
         await db.commit()
     except Exception as exc:
         await db.rollback()
-        for _, artifact_path in artifact_paths:
-            try:
-                await storage.delete(artifact_path)
-            except StorageError:
-                logger.warning(
-                    "failed to remove orphaned artifact %s after DB failure",
-                    artifact_path,
-                    exc_info=True,
-                )
+        try:
+            await storage.delete(artifact_path)
+        except StorageError:
+            logger.warning(
+                "failed to remove orphaned artifact %s after DB failure",
+                artifact_path,
+                exc_info=True,
+            )
         try:
             await _set_failed(db, job_id)
         except Exception:
             logger.exception("failed to persist failed status for job %s", job_id)
         raise ProcessingError(f"processing failed for job {job_id}") from exc
-    await db.refresh(artifacts[0])
-    return artifacts[0]
+    await db.refresh(artifact)
+    return artifact
 
 
 async def process_job(job_id: uuid.UUID, db: AsyncSession, storage: Storage) -> ProcessingResult:
@@ -268,36 +261,16 @@ async def process_job(job_id: uuid.UUID, db: AsyncSession, storage: Storage) -> 
             "processing failed: stored input files could not be verified"
         ) from exc
 
-    artifact_paths: list[tuple[str, str]] = []
-    summary_path = f"{job.user_id}/{job_id}/artifacts/{uuid.uuid4().hex}.json"
+    artifact_path = f"{job.user_id}/{job_id}/artifacts/{uuid.uuid4().hex}.json"
     content = _build_artifact_content(job, input_files, inspections)
-    normalized_path = f"{job.user_id}/{job_id}/artifacts/{uuid.uuid4().hex}.json"
-    records = build_normalized_records(inspections)
     try:
-        await storage.save(_chunks_of(content), summary_path, max_size=_ARTIFACT_MAX_BYTES)
-        artifact_paths.append((PROCESSING_ARTIFACT_TYPE, summary_path))
-
-        await storage.save(
-            serialize_normalized_records(records),
-            normalized_path,
-            max_size=normalized_artifact_max_bytes(len(records)),
-        )
-        artifact_paths.append((NORMALIZED_ARTIFACT_TYPE, normalized_path))
+        await storage.save(_chunks_of(content), artifact_path, max_size=_ARTIFACT_MAX_BYTES)
     except StorageError as exc:
-        for _, artifact_path in artifact_paths:
-            try:
-                await storage.delete(artifact_path)
-            except StorageError:
-                logger.warning(
-                    "failed to remove orphaned artifact %s after write failure",
-                    artifact_path,
-                    exc_info=True,
-                )
         await _set_failed(db, job_id)
         logger.exception("artifact write failed for job %s", job_id)
-        raise ProcessingError("processing failed: could not write artifacts") from exc
+        raise ProcessingError("processing failed: could not write artifact") from exc
 
-    artifact = await _complete_job(db, storage, job_id, artifact_paths)
+    artifact = await _complete_job(db, storage, job_id, artifact_path)
     return ProcessingResult(
         job_id=job_id,
         artifact_id=artifact.id,

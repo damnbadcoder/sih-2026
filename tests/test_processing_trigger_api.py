@@ -167,10 +167,9 @@ async def test_trigger_accepts_processing_and_completes_job(
 
     data = await _wait_for_status(client, token, job_id, "completed")
     assert data["status"] == "completed"
-    assert len(data["artifacts"]) == 2
+    assert len(data["artifacts"]) == 1
     assert data["artifacts"][0]["artifact_type"] == "processing_result"
-    assert data["artifacts"][1]["artifact_type"] == "normalized_content"
-    assert await _artifact_count(job_id) == 2
+    assert await _artifact_count(job_id) == 1
 
 
 async def test_trigger_response_leaks_no_internal_state(
@@ -230,7 +229,7 @@ async def test_trigger_returns_before_processing_finishes(
 
     gate.release.set()
     await _wait_for_status(client, token, job_id, "completed")
-    assert await _artifact_count(job_id) == 2
+    assert await _artifact_count(job_id) == 1
 
 
 async def test_duplicate_trigger_while_processing_returns_409(
@@ -251,7 +250,7 @@ async def test_duplicate_trigger_while_processing_returns_409(
 
     gate.release.set()
     await _wait_for_status(client, token, job_id, "completed")
-    assert await _artifact_count(job_id) == 2
+    assert await _artifact_count(job_id) == 1
 
 
 async def test_trigger_already_completed_job_returns_409(

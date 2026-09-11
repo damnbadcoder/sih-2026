@@ -209,23 +209,21 @@ async def test_valid_job_transitions_created_processing_completed(
     assert await _job_status(job_id) == "completed"
 
 
-async def test_successful_processing_creates_two_artifacts(
+async def test_successful_processing_creates_exactly_one_artifact(
     client: AsyncClient, storage: LocalStorage
 ):
-    email = unique_email("proc_two")
+    email = unique_email("proc_one")
     _, _, job_id = await _setup(client, email, upload_count=1)
 
     async with async_session_factory() as db:
         await reserve_job_for_processing(db, uuid.UUID(job_id))
         result = await process_job(uuid.UUID(job_id), db, storage)
 
-    assert await _artifact_count(job_id) == 2
+    assert await _artifact_count(job_id) == 1
     async with async_session_factory() as db:
         artifact = await db.scalar(select(Artifact).where(Artifact.id == result.artifact_id))
-        types = set((await db.scalars(select(Artifact.artifact_type))).all())
     assert artifact.job_id == uuid.UUID(job_id)
     assert artifact.artifact_type == "processing_result"
-    assert types == {"processing_result", "normalized_content"}
 
 
 async def test_artifact_file_path_is_relative(client: AsyncClient, storage: LocalStorage):
@@ -323,7 +321,7 @@ async def test_already_completed_job_cannot_be_processed_again(
         async with async_session_factory() as db:
             await process_job(uuid.UUID(job_id), db, storage)
 
-    assert await _artifact_count(job_id) == 2
+    assert await _artifact_count(job_id) == 1
 
 
 async def test_concurrent_processors_cannot_both_claim_a_created_job(

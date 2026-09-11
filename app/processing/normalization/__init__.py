@@ -1,31 +1,36 @@
 """Stage 13 — content normalization.
 
-Turns the in-memory content produced by the Stage 12 inspection layer into a
-clean, deterministic, normalized internal representation that later stages
-(such as the Stage 14 transformation boundary) can consume.
+An internal, deterministic, in-memory normalization boundary between the
+Stage 12 inspection layer and the future Stage 14 transformation boundary.
+
+- Input:  an iterable of ``InspectionResult`` objects (produced by Stage 12).
+- Output: a synchronous iterator of one normalized record per inspection,
+          consumed incrementally; the full corpus is never materialized here.
 
 Design rules:
 - Pure, deterministic functions; identical input always yields identical output.
 - Only meaning-preserving transformations: Unicode NFC composition, unified
-  ``\\n`` line endings, removal of non-text control characters, and trailing
-  per-line whitespace. Document structure (paragraph/page splitting already
-  produced by inspectors, indentation, blank lines) is preserved as-is.
-- The normalized representation is written to its own artifact and is only
-  ever touched through the storage abstraction (never filesystem paths).
-- Per-file byte caps keep serialized output bounded; truncated text is flagged
-  explicitly so downstream consumers can decide what to do with it.
+  ``\\n`` line endings, removal of non-text control characters (including DEL),
+  and trailing per-line whitespace. Document structure (paragraph/page splitting
+  already produced by inspectors, indentation, blank lines) is preserved as-is.
+- No persistence coupling: normalization touches no Artifact, storage, database,
+  or API. Records live only in the calling process's memory.
+- Per-record UTF-8 byte cap keeps downstream stages bounded; truncation is
+  flagged explicitly so consumers can decide what to do with it.
+
+Ordering contract:
+Normalization preserves the input/inspection order supplied by the processing
+service; the current processing service supplies ``InputFile.created_at``
+ascending order. Ordering must never be re-sorted inside normalization.
 """
 
-import json
 import re
 import unicodedata
-from collections.abc import AsyncIterator
+from collections.abc import Iterable, Iterator
 from typing import Any
 
 from app.config import get_settings
 from app.processing.inspection import InspectionResult
-
-NORMALIZED_ARTIFACT_TYPE = "normalized_content"
 
 _NEWLINE_RE = re.compile(r"\r\n|\r|\n")
 _TRAILING_LINE_WS_RE = re.compile(r"[ \t]+(?=\n|$)")
@@ -41,7 +46,7 @@ def normalize_text(text: str) -> str:
 
     - Unicode NFC composition (never NFKC, which would alter semantics).
     - Unified ``\\n`` line endings (CRLF, CR, LF).
-    - Removal of C0 control characters other than tab/newline.
+    - Removal of C0 control characters other than tab/newline (including DEL).
     - Trailing horizontal whitespace removed from each line.
     - A single trailing newline at end of output.
 
@@ -126,44 +131,22 @@ def _record_for(result: InspectionResult, cap_bytes: int) -> dict[str, Any]:
     }
 
 
-def build_normalized_records(
-    inspections: list[InspectionResult],
+def iter_normalized_records(
+    inspections: Iterable[InspectionResult],
     *,
     cap_bytes: int | None = None,
-) -> list[dict[str, Any]]:
-    """Build deterministic per-file normalized records.
+) -> Iterator[dict[str, Any]]:
+    """Yield one deterministic normalized record per inspection, in input order.
 
-    Record order matches the input-file order (the order inspections were
-    produced in). ``cap_bytes`` bounds each file's normalized text to a UTF-8
-    byte budget; it defaults to the configured upload-size limit so normalized
-    output never exceeds what was permitted at upload time.
+    A synchronous generator: per-record work is CPU-only (no await boundary),
+    so Stage 14 can consume each normalized input one at a time without ever
+    building the full corpus in memory here.
+
+    ``cap_bytes`` bounds each file's normalized text to a UTF-8 byte budget;
+    it defaults to the configured upload-size limit so normalized output never
+    exceeds what was permitted at upload time.
     """
     if cap_bytes is None:
         cap_bytes = get_settings().MAX_UPLOAD_SIZE_BYTES
-    return [_record_for(result, cap_bytes) for result in inspections]
-
-
-async def serialize_normalized_records(
-    records: list[dict[str, Any]],
-) -> AsyncIterator[bytes]:
-    """Serialize normalized records as newline-delimited JSON (streaming).
-
-    Each record becomes exactly one line of compact JSON with sorted keys, so
-    serialization is byte-for-byte deterministic and can be streamed to
-    storage without buffering the whole artifact in memory.
-    """
-    for record in records:
-        line = json.dumps(
-            record, sort_keys=True, ensure_ascii=False, separators=(",", ":")
-        ).encode("utf-8")
-        yield line + b"\n"
-
-
-def normalized_artifact_max_bytes(record_count: int) -> int:
-    """Guard size for a normalized artifact.
-
-    Worst case: record overhead plus JSON escaping roughly doubling per-file
-    capped text. This is a streaming safety net, not a content policy.
-    """
-    cap = get_settings().MAX_UPLOAD_SIZE_BYTES
-    return 2 * cap * max(record_count, 1) + 1024 * 1024
+    for result in inspections:
+        yield _record_for(result, cap_bytes)
