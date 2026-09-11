@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.config import get_settings
+from app.core.uploads import ALLOWED_UPLOAD_TYPES
 from app.db.session import async_session_factory, engine
 from app.main import app
 from app.models.input_file import InputFile
@@ -15,6 +16,8 @@ from app.models.job import Job
 from app.models.user import User
 from app.storage import get_storage
 from app.storage.local import LocalStorage
+
+_STORED_NAME_RE = re.compile(r"[0-9a-f]{32}\.(mp3|mp4|docx|xlsx|pdf|png|jpeg|jpg|txt|md)")
 
 CREATED_EMAILS: list[str] = []
 
@@ -54,6 +57,8 @@ def _auth(token: str) -> dict[str, str]:
 
 _PPTX = "application/vnd.openxmlformats-officedocument.presentationml.presentation"
 _DOCX = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+_XLSX = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+_MD = "text/markdown"
 
 
 async def _signup_and_login(client: AsyncClient, email: str) -> tuple[str, str]:
@@ -138,7 +143,7 @@ async def test_upload_to_another_users_job_is_404(client: AsyncClient):
     ("filename", "content_type", "content"),
     [
         ("report.pdf", "application/pdf", b"%PDF-1.4\n% dummy pdf\n"),
-        ("slides.pptx", _PPTX, b"PK\x03\x04dummy-pptx"),
+        ("sheet.xlsx", _XLSX, b"PK\x03\x04dummy-sheet"),
         ("doc.docx", _DOCX, b"PK\x03\x04dummy-docx"),
         ("notes.txt", "text/plain", b"hello world\n"),
     ],
@@ -169,7 +174,7 @@ async def test_valid_uploads_succeed(
         assert row.original_filename == filename
         assert row.content_type == content_type
         assert row.file_size == len(content)
-        assert re.fullmatch(r"[0-9a-f]{32}\.(pdf|pptx|docx|txt)", row.stored_filename)
+        assert re.fullmatch(_STORED_NAME_RE, row.stored_filename)
         assert row.stored_filename != filename
         assert row.storage_path == f"{user_id}/{job_id}/input/{row.stored_filename}"
 
@@ -177,6 +182,31 @@ async def test_valid_uploads_succeed(
     assert len(stored) == 1
     assert stored[0].read_bytes() == content
     assert stored[0].suffix == "." + filename.rsplit(".", 1)[1]
+
+
+@pytest.mark.parametrize(
+    "extension",
+    ["mp3", "mp4", "docx", "xlsx", "pdf", "png", "jpeg", "jpg", "txt", "md"],
+)
+async def test_all_ten_required_formats_upload_succeed(
+    client: AsyncClient, storage: LocalStorage, extension
+):
+    email = unique_email("up_ten")
+    CREATED_EMAILS.append(email)
+    user_id, token = await _signup_and_login(client, email)
+    job_id = await _create_job(client, token)
+
+    filename = f"sample.{extension}"
+    content_type = ALLOWED_UPLOAD_TYPES[f".{extension}"]
+    response = await _upload(client, token, job_id, filename, b"payload bytes", content_type)
+    assert response.status_code == 201, response.text
+
+    data = response.json()
+    async with async_session_factory() as db:
+        row = await db.scalar(select(InputFile).where(InputFile.id == uuid.UUID(data["id"])))
+        assert row.content_type == content_type
+        assert row.stored_filename.endswith(f".{extension}")
+        assert row.storage_path == f"{user_id}/{job_id}/input/{row.stored_filename}"
 
 
 async def test_uploaded_file_contents_match_on_disk(client: AsyncClient, storage: LocalStorage):
@@ -257,7 +287,7 @@ async def test_oversized_upload_returns_413_and_leaves_no_trace(
     assert _stored_files(storage, job_id) == []
 
 
-@pytest.mark.parametrize("filename", ["notes.pdf", "notes.docx", "notes.pptx"])
+@pytest.mark.parametrize("filename", ["notes.pdf", "notes.docx", "notes.png"])
 async def test_content_type_mismatch_rejected(client: AsyncClient, storage: LocalStorage, filename):
     email = unique_email("up_mismatch")
     CREATED_EMAILS.append(email)
@@ -275,7 +305,8 @@ async def test_content_type_mismatch_rejected(client: AsyncClient, storage: Loca
     [
         ("run.exe", "application/octet-stream"),
         ("archive.zip", "application/zip"),
-        ("image.png", "image/png"),
+        ("script.py", "text/x-python"),
+        ("icons.svg", "image/svg+xml"),
     ],
 )
 async def test_unsupported_type_rejected(

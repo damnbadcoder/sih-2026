@@ -8,11 +8,29 @@ from app.core.uploads import (
 )
 
 
-@pytest.mark.parametrize("ext", [".pdf", ".pptx", ".docx", ".txt"])
+@pytest.mark.parametrize(
+    "ext",
+    [".mp3", ".mp4", ".docx", ".xlsx", ".pdf", ".png", ".jpeg", ".jpg", ".txt", ".md"],
+)
 def test_allowed_extensions_accepted(ext):
     content_type, returned_ext = validate_upload_type(f"report{ext}", None)
     assert returned_ext == ext
     assert content_type == ALLOWED_UPLOAD_TYPES[ext]
+
+
+def test_allowed_upload_types_are_exactly_the_ten_required_formats():
+    assert set(ALLOWED_UPLOAD_TYPES) == {
+        ".mp3",
+        ".mp4",
+        ".docx",
+        ".xlsx",
+        ".pdf",
+        ".png",
+        ".jpeg",
+        ".jpg",
+        ".txt",
+        ".md",
+    }
 
 
 def test_extension_is_case_insensitive():
@@ -21,7 +39,20 @@ def test_extension_is_case_insensitive():
     assert content_type == "application/pdf"
 
 
-@pytest.mark.parametrize("filename", ["notes.zip", "run.exe", "evil.sh", "img.png", "noext"])
+@pytest.mark.parametrize(
+    "filename",
+    [
+        "notes.zip",
+        "run.exe",
+        "evil.sh",
+        "script.py",
+        "ps1.ps1",
+        "icons.svg",
+        "slides.pptx",
+        "archive.tar.gz",
+        "noext",
+    ],
+)
 def test_disallowed_extensions_rejected(filename):
     with pytest.raises(UploadValidationError):
         validate_upload_type(filename, "application/octet-stream")
@@ -30,6 +61,14 @@ def test_disallowed_extensions_rejected(filename):
 def test_known_content_type_must_match_extension():
     with pytest.raises(UploadValidationError):
         validate_upload_type("report.pdf", "text/plain")
+
+
+@pytest.mark.parametrize(
+    ("filename", "mismatched"), [("photo.png", "text/plain"), ("song.mp3", "application/pdf")]
+)
+def test_known_content_type_must_match_new_formats(filename, mismatched):
+    with pytest.raises(UploadValidationError):
+        validate_upload_type(filename, mismatched)
 
 
 def test_generic_content_type_falls_back_to_canonical():

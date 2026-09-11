@@ -24,9 +24,12 @@ from app.models.input_file import InputFile
 from app.models.job import Job
 from app.models.user import User
 from app.processing.inspection import (
+    AudioInspector,
+    ImageInspector,
     InspectionError,
     InspectionResult,
     TextInspector,
+    VideoInspector,
     get_inspector,
     register_inspector,
 )
@@ -160,25 +163,27 @@ def test_classify_returns_format_class():
 def test_inspector_selection_returns_text_and_none_for_others():
     assert isinstance(get_inspector(MEDIA_CATEGORY_TEXT), TextInspector)
     assert get_inspector(MEDIA_CATEGORY_DOCUMENT) is None
+    # Presentation and unknown categories have no registered inspector.
     assert get_inspector(MEDIA_CATEGORY_PRESENTATION) is None
-    assert get_inspector(MEDIA_CATEGORY_IMAGE) is None
-    assert get_inspector(MEDIA_CATEGORY_AUDIO) is None
-    assert get_inspector(MEDIA_CATEGORY_VIDEO) is None
     assert get_inspector(MEDIA_CATEGORY_UNKNOWN) is None
+    # Image/audio/video categories are now served by their own inspectors.
+    assert isinstance(get_inspector(MEDIA_CATEGORY_IMAGE), ImageInspector)
+    assert isinstance(get_inspector(MEDIA_CATEGORY_AUDIO), AudioInspector)
+    assert isinstance(get_inspector(MEDIA_CATEGORY_VIDEO), VideoInspector)
 
 
 async def test_register_inspector_makes_category_supported():
     class _DummyInspector:
-        media_category = MEDIA_CATEGORY_IMAGE
+        media_category = MEDIA_CATEGORY_PRESENTATION
 
         async def inspect(self, file, storage) -> InspectionResult:
             raise AssertionError("should not be called")
 
     register_inspector(_DummyInspector())
     try:
-        assert get_inspector(MEDIA_CATEGORY_IMAGE) is not None
+        assert get_inspector(MEDIA_CATEGORY_PRESENTATION) is not None
     finally:
-        inspection_registry._INSPECTORS.pop(MEDIA_CATEGORY_IMAGE, None)
+        inspection_registry._INSPECTORS.pop(MEDIA_CATEGORY_PRESENTATION, None)
 
 
 # --- TEXT inspection --------------------------------------------------------
@@ -417,14 +422,17 @@ async def test_processing_unsupported_presentation_completes_but_flagged(
     CREATED_EMAILS.append(email)
     _, token = await _signup_and_login(client, email)
     job_id = await _create_job(client, token)
-    await _upload(
-        client,
-        token,
-        job_id,
-        "slides.pptx",
-        b"%PPTX fake bytes",
-        content_type="application/vnd.openxmlformats-officedocument.presentationml.presentation",
-    )
+
+    # Presentation files are not an allowed upload format anymore, so an
+    # unsupported-format input can only reach processing via a directly
+    # seeded database row (e.g. legacy data) — the flag must still surface.
+    pptx_mime = "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+    input_file = make_input_file(storage, "slides.pptx", pptx_mime, b"%PPTX fake bytes")
+    input_file.job_id = uuid.UUID(job_id)
+    await write_via_storage(storage, input_file, b"%PPTX fake bytes")
+    async with async_session_factory() as db:
+        db.add(input_file)
+        await db.commit()
 
     result = await _reserve_and_process(job_id, storage)
 

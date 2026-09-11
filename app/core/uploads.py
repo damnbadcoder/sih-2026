@@ -1,10 +1,19 @@
 from pathlib import PurePosixPath
 
+# The product-approved input formats: EXACTLY these ten (and no others).
+# Do not add extensions here without an explicit product decision and a
+# matching Stage 12 inspector + processing path.
 ALLOWED_UPLOAD_TYPES: dict[str, str] = {
-    ".pdf": "application/pdf",
-    ".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    ".mp3": "audio/mpeg",
+    ".mp4": "video/mp4",
     ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    ".pdf": "application/pdf",
+    ".png": "image/png",
+    ".jpeg": "image/jpeg",
+    ".jpg": "image/jpeg",
     ".txt": "text/plain",
+    ".md": "text/markdown",
 }
 
 _KNOWN_TRANSPORT_TYPES = {"", "application/octet-stream"}

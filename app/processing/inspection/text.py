@@ -13,11 +13,16 @@ _READ_CHUNK_BYTES = 64 * 1024
 
 
 class TextInspector(BaseInspector):
-    """Plain-text inspector: safe UTF-8 decode with graceful fallbacks."""
+    """Plain-text inspector: safe UTF-8 decode with graceful fallbacks.
+
+    Covers plain text (``.txt``) and Markdown (``.md``): both are decoded as
+    UTF-8 with a BOM tolerance and lossy fallback, so no separate Markdown
+    parser is needed or duplicated.
+    """
 
     media_category = MEDIA_CATEGORY_TEXT
-    supported_extensions = frozenset({".txt"})
-    supported_mime_types = frozenset({"text/plain"})
+    supported_extensions = frozenset({".txt", ".md"})
+    supported_mime_types = frozenset({"text/plain", "text/markdown"})
 
     def __init__(self, max_text_bytes: int | None = None) -> None:
         self._max_text_bytes = max_text_bytes

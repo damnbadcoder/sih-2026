@@ -173,13 +173,26 @@ def test_selection_routes_documents_to_distinct_inspectors():
 def test_selection_unsupported_categories_are_none():
     classifications = [
         classify_format("slides.pptx", _PPTX_MIME),
-        classify_format("pic.png", "image/png"),
-        classify_format("song.mp3", "audio/mpeg"),
-        classify_format("clip.mp4", "video/mp4"),
         classify_format("blob.xyz", "application/octet-stream"),
     ]
     for classification in classifications:
         assert get_inspector(classification) is None
+
+
+def test_selection_resolves_new_supported_formats():
+    from app.processing.inspection.audio import AudioInspector
+    from app.processing.inspection.image import ImageInspector
+    from app.processing.inspection.spreadsheet import XLSXInspector
+    from app.processing.inspection.video import VideoInspector
+
+    sheet = classify_format(
+        "data.xlsx",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
+    assert isinstance(get_inspector(sheet), XLSXInspector)
+    assert isinstance(get_inspector(classify_format("pic.png", "image/png")), ImageInspector)
+    assert isinstance(get_inspector(classify_format("song.mp3", "audio/mpeg")), AudioInspector)
+    assert isinstance(get_inspector(classify_format("clip.mp4", "video/mp4")), VideoInspector)
 
 
 def test_selection_coarse_document_category_remains_ambiguous():

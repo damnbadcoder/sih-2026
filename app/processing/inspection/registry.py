@@ -1,16 +1,26 @@
 from app.core.formats import (
+    MEDIA_CATEGORY_AUDIO,
     MEDIA_CATEGORY_DOCUMENT,
+    MEDIA_CATEGORY_IMAGE,
     MEDIA_CATEGORY_TEXT,
+    MEDIA_CATEGORY_VIDEO,
     FormatClass,
 )
+from app.processing.inspection.audio import AudioInspector
 from app.processing.inspection.base import ContentInspector
 from app.processing.inspection.docx import DOCXInspector
+from app.processing.inspection.image import ImageInspector
 from app.processing.inspection.pdf import PDFInspector
+from app.processing.inspection.spreadsheet import XLSXInspector
 from app.processing.inspection.text import TextInspector
+from app.processing.inspection.video import VideoInspector
 
 _INSPECTORS: dict[str, list[ContentInspector]] = {
     MEDIA_CATEGORY_TEXT: [TextInspector()],
-    MEDIA_CATEGORY_DOCUMENT: [PDFInspector(), DOCXInspector()],
+    MEDIA_CATEGORY_DOCUMENT: [PDFInspector(), DOCXInspector(), XLSXInspector()],
+    MEDIA_CATEGORY_IMAGE: [ImageInspector()],
+    MEDIA_CATEGORY_AUDIO: [AudioInspector()],
+    MEDIA_CATEGORY_VIDEO: [VideoInspector()],
 }
 
 
