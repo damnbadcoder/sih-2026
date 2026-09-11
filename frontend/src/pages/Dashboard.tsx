@@ -78,6 +78,7 @@ export default function Dashboard() {
   const [refinement, setRefinement] = useState("");
   const [retrying, setRetrying] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [historyOpen, setHistoryOpen] = useState(false);
 
   const active: Deliverable | undefined = gen?.deliverables.find(
     (d) => d.outputType === activeId
@@ -113,31 +114,6 @@ export default function Dashboard() {
     setDraft("");
     setRefinement("");
     setGenError("");
-  }
-
-  function goToStep1() {
-    if (currentStage === 3) {
-      startNewTransformation();
-    } else {
-      setGen(null);
-      setPreviewsByType({});
-      setActivePreviewId(null);
-    }
-  }
-
-  function goToStep2() {
-    if (currentStage === 1) {
-      createPreview();
-    } else if (currentStage === 3 && gen) {
-      if (gen.previewsByType && Object.keys(gen.previewsByType).length > 0) {
-        setPreviewsByType(gen.previewsByType);
-        setActivePreviewId(Array.from(selected)[0] ?? null);
-        setPreviewCitations(gen.citations);
-      } else {
-        createPreview();
-      }
-      setGen(null);
-    }
   }
 
   function paramsFor(id: OutputTypeId): GenerationParams {
@@ -304,6 +280,7 @@ export default function Dashboard() {
     setLinks(item.links.join("\n"));
     setEditing(false);
     setOpenParams(null);
+    setHistoryOpen(false);
   }
 
   function acceptDraft() {
@@ -345,36 +322,34 @@ export default function Dashboard() {
   return (
     <div className="app">
       <header className="topbar">
-        <div className="brand"><span className="logo-mark sm">⌁</span> Transmute</div>
+        <div className="topbar-left">
+          <button
+            type="button"
+            className="ghost sm history-toggle"
+            onClick={() => setHistoryOpen((v) => !v)}
+            aria-label="Toggle history"
+          >
+            <span className="history-icon">☰</span>
+            {history.length > 0 && <span className="history-badge">{history.length}</span>}
+          </button>
+          <div className="brand"><span className="logo-mark sm">⌁</span> Transmute</div>
+        </div>
 
         <nav className="stage-stepper" aria-label="Transformation Progress">
-          <button
-            type="button"
-            className={`step-node ${currentStage === 1 ? "active" : "completed"}`}
-            onClick={goToStep1}
-          >
+          <div className={`step-node ${currentStage === 1 ? "active" : "completed"}`}>
             <span className="step-num">1</span>
             <span className="step-label">Ingest & Configure</span>
-          </button>
+          </div>
           <span className="step-divider" aria-hidden="true">→</span>
-          <button
-            type="button"
-            className={`step-node ${currentStage === 2 ? "active" : currentStage > 2 ? "completed" : "pending"}`}
-            onClick={goToStep2}
-            disabled={currentStage === 1 && (selected.size === 0 || (!sourceText.trim() && !fileNames.length && !links.trim()))}
-          >
+          <div className={`step-node ${currentStage === 2 ? "active" : currentStage > 2 ? "completed" : "pending"}`}>
             <span className="step-num">2</span>
             <span className="step-label">Blueprint Approval</span>
-          </button>
+          </div>
           <span className="step-divider" aria-hidden="true">→</span>
-          <button
-            type="button"
-            className={`step-node ${currentStage === 3 ? "active" : "pending"}`}
-            disabled={!gen}
-          >
+          <div className={`step-node ${currentStage === 3 ? "active" : "pending"}`}>
             <span className="step-num">3</span>
             <span className="step-label">Deliverables</span>
-          </button>
+          </div>
         </nav>
 
         <div className="topbar-right">
@@ -383,30 +358,42 @@ export default function Dashboard() {
         </div>
       </header>
 
-      <div className="workspace">
-        <aside className="sidebar">
-          <div className="sidebar-user">
-            <div className="avatar">{user.name.slice(0, 1).toUpperCase()}</div>
-            <div><strong>{user.name}</strong><span>{user.email}</span><span>{user.organisation || user.userType}</span></div>
-          </div>
-          <button className="primary sm" onClick={startNewTransformation} style={{ width: "100%" }}>
-            + New Transformation
-          </button>
-          <h2 className="col-title">History</h2>
-          {history.length === 0 ? <p className="muted sidebar-empty">No generations yet.</p> : (
-            <ul className="card history">
-              {history.map((item) => (
-                <li key={item.id}>
-                  <button onClick={() => openHistory(item)}>
-                    <strong>{item.deliverables.map((d) => outputTypeLabel(d.outputType)).join(", ")}</strong>
-                    <span className="muted">{new Date(item.createdAt).toLocaleDateString()} · {sourceSummary(item)}</span>
-                  </button>
-                </li>
-              ))}
-            </ul>
-          )}
-        </aside>
+      {historyOpen && (
+        <div className="drawer-backdrop" onClick={() => setHistoryOpen(false)} aria-hidden="true" />
+      )}
 
+      <aside className={`history-drawer ${historyOpen ? "open" : ""}`}>
+        <div className="drawer-header">
+          <h3>History</h3>
+          <button className="ghost sm" onClick={() => setHistoryOpen(false)}>✕</button>
+        </div>
+
+        <div className="sidebar-user">
+          <div className="avatar">{user.name.slice(0, 1).toUpperCase()}</div>
+          <div><strong>{user.name}</strong><span>{user.email}</span><span>{user.organisation || user.userType}</span></div>
+        </div>
+
+        <button className="primary sm" onClick={() => { startNewTransformation(); setHistoryOpen(false); }} style={{ width: "100%" }}>
+          + New Transformation
+        </button>
+
+        {history.length === 0 ? (
+          <p className="muted sidebar-empty">No generations yet.</p>
+        ) : (
+          <ul className="history-list">
+            {history.map((item) => (
+              <li key={item.id}>
+                <button onClick={() => openHistory(item)}>
+                  <strong>{item.deliverables.map((d) => outputTypeLabel(d.outputType)).join(", ")}</strong>
+                  <span className="muted">{new Date(item.createdAt).toLocaleDateString()} · {sourceSummary(item)}</span>
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+      </aside>
+
+      <div className="workspace">
         <main className="col-input">
           <h2 className="col-title">1 · Source content</h2>
           <div className="card">
@@ -417,7 +404,7 @@ export default function Dashboard() {
                 </button>
               ))}
             </div>
-            {sourceTab === "text" && <textarea className="source-text" placeholder="Paste an article, report, advisory, incident note, or a free-form prompt…" value={sourceText} onChange={(e) => setSourceText(e.target.value)} rows={10} />}
+            {sourceTab === "text" && <textarea className="source-text" placeholder="Paste an article, report, advisory, incident note, or a free-form prompt…" value={sourceText} onChange={(e) => setSourceText(e.target.value)} rows={12} />}
             {sourceTab === "files" && (
               <div className="dropzone">
                 <button className="ghost" onClick={() => fileInput.current?.click()}>Attach files</button>
@@ -426,7 +413,7 @@ export default function Dashboard() {
                 {fileNames.length > 0 && <ul className="file-list">{fileNames.map((name) => <li key={name}>{name}<button className="x" onClick={() => setFileNames((prev) => prev.filter((item) => item !== name))}>×</button></li>)}</ul>}
               </div>
             )}
-            {sourceTab === "links" && <textarea className="source-text" placeholder={"https://example.org/threat-report\nhttps://news.example.com/breach"} value={links} onChange={(e) => setLinks(e.target.value)} rows={5} />}
+            {sourceTab === "links" && <textarea className="source-text" placeholder={"https://example.org/threat-report\nhttps://news.example.com/breach"} value={links} onChange={(e) => setLinks(e.target.value)} rows={6} />}
           </div>
 
           <h2 className="col-title">2 · Output types <span className="muted">({selected.size} selected)</span></h2>
