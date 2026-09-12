@@ -22,6 +22,10 @@ class Settings(BaseSettings):
     UPLOAD_DIR: str = "./uploads"
     MAX_UPLOAD_SIZE_BYTES: int = 25 * 1024 * 1024
 
+    URL_INGESTION_ENABLED: bool = False
+    URL_ALLOWED_SCHEMES: str = "http,https"
+    URL_ALLOWED_HOSTS: str = ""
+
     @model_validator(mode="after")
     def _validate_jwt_secret(self) -> "Settings":
         if self.APP_ENV != "production":

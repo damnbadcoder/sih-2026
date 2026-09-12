@@ -83,7 +83,7 @@ def test_input_file_job_relationship():
 
 
 def test_relationships_sets():
-    assert set(inspect(User).relationships.keys()) == {"jobs"}
+    assert set(inspect(User).relationships.keys()) == {"jobs", "transformations"}
     assert set(inspect(Job).relationships.keys()) == {"user", "artifacts", "input_files"}
     assert set(inspect(Artifact).relationships.keys()) == {"job"}
     assert set(inspect(InputFile).relationships.keys()) == {"job"}

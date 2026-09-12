@@ -11,6 +11,7 @@ from app.db.base import Base
 
 if TYPE_CHECKING:
     from app.models.job import Job
+    from app.models.transformation import Transformation
 
 
 class User(Base):
@@ -23,6 +24,9 @@ class User(Base):
     )
     email: Mapped[str] = mapped_column(String(255), unique=True, nullable=False)
     password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
+    name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    user_type: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    organisation: Mapped[str | None] = mapped_column(String(255), nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
@@ -38,6 +42,12 @@ class User(Base):
 
     jobs: Mapped[list["Job"]] = relationship(
         "Job",
+        back_populates="user",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
+    transformations: Mapped[list["Transformation"]] = relationship(
+        "Transformation",
         back_populates="user",
         cascade="all, delete-orphan",
         passive_deletes=True,

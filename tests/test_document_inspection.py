@@ -17,6 +17,7 @@ from app.processing.inspection import (
     DOCXInspector,
     InspectionError,
     PDFInspector,
+    PPTXInspector,
     get_inspector,
 )
 from app.processing.service import (
@@ -170,16 +171,30 @@ def test_selection_routes_documents_to_distinct_inspectors():
     assert get_inspector(pdf) is not get_inspector(docx)
 
 
-def test_selection_unsupported_categories_are_none():
-    classifications = [
-        classify_format("slides.pptx", _PPTX_MIME),
-        classify_format("pic.png", "image/png"),
-        classify_format("song.mp3", "audio/mpeg"),
-        classify_format("clip.mp4", "video/mp4"),
-        classify_format("blob.xyz", "application/octet-stream"),
-    ]
-    for classification in classifications:
-        assert get_inspector(classification) is None
+def test_selection_resolves_pptx_via_format_class():
+    inspector = get_inspector(classify_format("slides.pptx", _PPTX_MIME))
+    assert isinstance(inspector, PPTXInspector)
+
+
+def test_selection_unknown_category_is_none():
+    classification = classify_format("blob.xyz", "application/octet-stream")
+    assert get_inspector(classification) is None
+
+
+def test_selection_resolves_new_supported_formats():
+    from app.processing.inspection.audio import AudioInspector
+    from app.processing.inspection.image import ImageInspector
+    from app.processing.inspection.spreadsheet import XLSXInspector
+    from app.processing.inspection.video import VideoInspector
+
+    sheet = classify_format(
+        "data.xlsx",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
+    assert isinstance(get_inspector(sheet), XLSXInspector)
+    assert isinstance(get_inspector(classify_format("pic.png", "image/png")), ImageInspector)
+    assert isinstance(get_inspector(classify_format("song.mp3", "audio/mpeg")), AudioInspector)
+    assert isinstance(get_inspector(classify_format("clip.mp4", "video/mp4")), VideoInspector)
 
 
 def test_selection_coarse_document_category_remains_ambiguous():
