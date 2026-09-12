@@ -50,7 +50,7 @@ class AudioPreprocessor:
 
     @staticmethod
     def _estimate_duration(raw_bytes: bytes, mime_type: str) -> Optional[float]:
-        """Attempts to read duration from audio headers using built-in libraries."""
+        """Attempts to read duration from audio headers using built-in libraries or ffprobe."""
         if "wav" in mime_type:
             try:
                 with wave.open(io.BytesIO(raw_bytes), "rb") as wf:
@@ -60,4 +60,19 @@ class AudioPreprocessor:
                         return round(frames / float(rate), 2)
             except Exception:
                 pass
+
+        # Fallback for MP3, M4A, OGG, FLAC via ffprobe if available
+        try:
+            import subprocess
+            res = subprocess.run(
+                ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", "-"],
+                input=raw_bytes,
+                capture_output=True,
+                timeout=5,
+            )
+            if res.returncode == 0 and res.stdout.strip():
+                return round(float(res.stdout.strip()), 2)
+        except Exception:
+            pass
+
         return None

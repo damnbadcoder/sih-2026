@@ -1,7 +1,7 @@
 """
 OCR and Image Text Extraction Utilities.
-Provides optical character recognition for embedded screenshots, scanned pages,
-diagrams, and figures inside PDF and DOCX documents.
+Provides OCR with automated image pre-processing, contrast normalization,
+and multi-mode page segmentation to support slide infographics and diagrams.
 """
 
 import io
@@ -9,7 +9,7 @@ import re
 from typing import Optional
 
 try:
-    from PIL import Image
+    from PIL import Image, ImageEnhance, ImageFilter
     import pytesseract
     OCR_AVAILABLE = True
 except ImportError:
@@ -21,48 +21,56 @@ def is_ocr_available() -> bool:
     return OCR_AVAILABLE
 
 
-def extract_text_from_image_bytes(image_bytes: bytes, min_length: int = 5) -> str:
+def extract_text_from_image_bytes(image_bytes: bytes, min_length: int = 5, psm_mode: int = 6) -> str:
     """
-    Extracts text from raw image bytes using Tesseract OCR.
+    Extracts text from binary image content with contrast adjustment and adaptive PSM.
 
     Args:
-        image_bytes: Binary image content (PNG, JPEG, TIFF, BMP, etc.)
-        min_length: Minimum meaningful text length to return.
+        image_bytes: Binary image content.
+        min_length: Minimum text length to qualify as a valid extraction.
+        psm_mode: Tesseract Page Segmentation Mode (defaults to 6: Assume uniform text block).
 
     Returns:
-        Extracted text or empty string if no text detected / OCR fails.
+        Extracted, cleaned text string.
     """
     if not OCR_AVAILABLE or not image_bytes:
         return ""
 
     try:
         image = Image.open(io.BytesIO(image_bytes))
-        # Convert paletted or RGBA to RGB for robust OCR
-        if image.mode in ("P", "RGBA", "LA"):
-            image = image.convert("RGB")
 
-        # Skip tiny thumbnail/icon images (e.g., bullet dots, logos < 50x50)
-        if image.width < 50 or image.height < 50:
+        # Filter tiny icons or bullet decorations
+        if image.width < 40 or image.height < 40:
             return ""
 
-        raw_text = pytesseract.image_to_string(image)
-        cleaned_text = clean_ocr_text(raw_text)
+        # Preprocessing: convert to grayscale and boost contrast for slide infographics
+        if image.mode != "L":
+            image = image.convert("L")
 
-        if len(cleaned_text.strip()) >= min_length:
-            return cleaned_text.strip()
-        return ""
+        enhancer = ImageEnhance.Contrast(image)
+        image = enhancer.enhance(1.8)
+
+        # Primary extraction using specified PSM
+        custom_config = f"--psm {psm_mode}"
+        raw_text = pytesseract.image_to_string(image, config=custom_config)
+        cleaned = clean_ocr_text(raw_text)
+
+        # Secondary pass with sparse layout mode (PSM 11) if primary pass yields low return
+        if len(cleaned) < min_length:
+            raw_text_sparse = pytesseract.image_to_string(image, config="--psm 11")
+            cleaned = clean_ocr_text(raw_text_sparse)
+
+        return cleaned if len(cleaned) >= min_length else ""
     except Exception:
-        # Gracefully handle unreadable or corrupted image streams
         return ""
 
 
 def clean_ocr_text(raw_text: str) -> str:
-    """Normalizes whitespace and removes excessive artifacts from OCR text."""
+    """Normalizes whitespace and strips non-printable OCR hallucination noise."""
     if not raw_text:
         return ""
-    # Normalize multiple newlines and spaces
     lines = [line.strip() for line in raw_text.splitlines() if line.strip()]
     cleaned = "\n".join(lines)
-    # Remove excessive repeated punctuation symbols common in OCR noise
+    # Strip excessive repetitive character runs
     cleaned = re.sub(r"([~`|_\-=*#])\1{4,}", "", cleaned)
     return cleaned.strip()

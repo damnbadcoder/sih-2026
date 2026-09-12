@@ -63,6 +63,19 @@ class TestTextIngestionPipeline(unittest.TestCase):
             self.assertIn("198.51.100.120", context.iocs.ipv4_addresses)
             self.assertIn("Volt Typhoon", context.threat_intel.threat_actors)
 
+    def test_ransomware_pdf_ingestion(self):
+        pdf_file = self.samples_dir / "RANSOMWARE_Report_Final.pdf"
+        if pdf_file.exists():
+            context = self.pipeline.process_file(str(pdf_file), save_outputs=True)
+            self.assertEqual(context.metadata.file_type, "pdf")
+            self.assertEqual(context.metadata.file_name, "RANSOMWARE_Report_Final.pdf")
+            self.assertIn("CVE-2021-40539", context.iocs.cves)
+            self.assertIn("CVE-2019-19781", context.iocs.cves)
+            self.assertIn("Lockbit", context.threat_intel.threat_actors)
+            self.assertIn("ALPHV", context.threat_intel.threat_actors)
+            self.assertIn("Active Directory", context.threat_intel.affected_systems)
+            self.assertGreater(context.metadata.word_count, 500)
+
     def test_docx_ingestion(self):
         docx_file = self.samples_dir / "sample_ransomware_brief.docx"
         if docx_file.exists():

@@ -1,11 +1,11 @@
 """
-PDF Parser using PyMuPDF4LLM and Tesseract OCR.
-Converts incoming PDF files into structured, hierarchical Markdown with table
-relationships preserved and embedded images/scanned pages OCR-processed into context.
+Universal PDF Parser using PyMuPDF and OCR.
+Extracts document metadata, attachments, visual hierarchy blocks, vector text,
+hyperlink annotations, AcroForms, and full-page fallback OCR renderings.
 """
 
 import os
-from typing import Tuple, List
+from typing import Tuple, List, Dict, Any
 import pymupdf
 import pymupdf4llm
 from pipelines.text_pipeline.schema import TableData
@@ -14,103 +14,150 @@ from pipelines.text_pipeline.extractors.ocr_utils import extract_text_from_image
 
 
 class PDFParser:
-    """Extracts high-fidelity Markdown, structured tables, and OCR text from PDF files."""
+    """Extracts high-fidelity Markdown, structured tables, and telemetry from all PDF layouts."""
+
+    MIN_TEXT_CHARS = 120
 
     def parse(self, file_path: str) -> Tuple[str, List[TableData]]:
-        """
-        Parses a PDF file into clean Markdown and structured TableData objects.
-        Also extracts and OCRs embedded figures, diagrams, and scanned pages.
-
-        Args:
-            file_path: Absolute or relative path to PDF file.
-
-        Returns:
-            Tuple of (clean_markdown_string, list_of_TableData)
-        """
         if not os.path.exists(file_path):
             raise FileNotFoundError(f"PDF file not found: {file_path}")
 
+        doc = pymupdf.open(file_path)
+        page_outputs: List[str] = []
+        ocr_enabled = is_ocr_available()
+
+        # Extract structured markdown with table preservation across all pages
         try:
-            # Primary high-fidelity parser via pymupdf4llm
-            markdown_content = pymupdf4llm.to_markdown(
-                doc=file_path,
-                page_chunks=False,
-                write_images=False,
-                extract_words=False
-            )
-            if not isinstance(markdown_content, str):
-                markdown_content = str(markdown_content)
+            page_chunks = pymupdf4llm.to_markdown(file_path, page_chunks=True)
         except Exception:
-            # Fallback to standard PyMuPDF text extraction if pymupdf4llm encounters layout edge cases
-            doc_fallback = pymupdf.open(file_path)
-            pages_text = []
-            for page_num in range(len(doc_fallback)):
-                page = doc_fallback[page_num]
-                pages_text.append(f"<!-- Page {page_num + 1} -->\n" + page.get_text())
-            doc_fallback.close()
-            markdown_content = "\n\n".join(pages_text)
+            page_chunks = []
 
-        # Extract embedded image and scanned page text via OCR if available
-        ocr_blocks = self._extract_image_ocr_blocks(file_path)
-        if ocr_blocks:
-            markdown_content += "\n\n## 🖼️ Extracted Embedded Image & Diagram Telemetry (OCR)\n\n" + "\n\n".join(ocr_blocks)
+        # 1. Document Metadata Header
+        meta_items = [
+            f"- **{k.capitalize()}:** {v}"
+            for k, v in doc.metadata.items()
+            if v and str(v).strip()
+        ]
+        if meta_items:
+            page_outputs.append("### 📋 Document Metadata\n" + "\n".join(meta_items))
 
-        # Clean any trailing excessive blank lines
+        # 2. Embedded Document Attachments (Malware droppers, embedded spreadsheets)
+        if doc.embfile_count() > 0:
+            emb_entries = []
+            for i in range(doc.embfile_count()):
+                emb_info = doc.embfile_info(i)
+                emb_name = emb_info.get("filename", f"attachment_{i}")
+                emb_size = emb_info.get("size", 0)
+                emb_entries.append(f"- `{emb_name}` ({emb_size} bytes)")
+            page_outputs.append("### 📎 Embedded File Attachments\n" + "\n".join(emb_entries))
+
+        # 3. Iterative Page-Level Processing
+        for page_num in range(len(doc)):
+            page = doc[page_num]
+            raw_text = page.get_text("text").strip()
+
+            chunk_text = ""
+            if page_num < len(page_chunks):
+                chunk_text = page_chunks[page_num].get("text", "").strip()
+
+            # Identify if page is graphic-heavy, vector-rendered, or scanned
+            if ocr_enabled and len(raw_text) < self.MIN_TEXT_CHARS:
+                page_ocr = self._ocr_entire_page(page, dpi=220)
+                if page_ocr:
+                    page_content = f"{chunk_text}\n\n**Visual / Scanned Content (OCR):**\n\n{page_ocr}".strip() if chunk_text else page_ocr
+                else:
+                    page_content = chunk_text or raw_text
+            else:
+                page_content = chunk_text or self._extract_structured_page(doc, page)
+
+            # Extract interactive AcroForm entries if present on the page
+            form_fields = self._extract_form_fields(page)
+            if form_fields:
+                page_content += "\n\n**Interactive Form Inputs:**\n" + "\n".join(
+                    f"- **{field['name']}:** {field['value']}" for field in form_fields
+                )
+
+            # Explicitly separate link annotations from security threat telemetry
+            ref_links = self._extract_annotated_links(page)
+            if ref_links:
+                page_content += "\n\n**Explicit Reference Links & Resources (Not Threat IOCs):**\n" + "\n".join(
+                    f"- [{item['title']}]({item['uri']})" if item['title'] != item['uri'] else f"- <{item['uri']}>"
+                    for item in ref_links
+                )
+
+            page_header = f"<!-- Page {page_num + 1} -->"
+            page_outputs.append(f"{page_header}\n{page_content}".strip())
+
+        doc.close()
+
+        combined_markdown = "\n\n---\n\n".join(page_outputs).strip()
         cleaned_markdown = "\n".join(
-            line for line in markdown_content.splitlines() if line.strip() or line == ""
+            line for line in combined_markdown.splitlines() if line.strip() or line == ""
         ).strip()
 
-        # Extract structured tables from the generated markdown
         tables = extract_markdown_tables(cleaned_markdown)
-
         return cleaned_markdown, tables
 
-    def _extract_image_ocr_blocks(self, file_path: str) -> List[str]:
-        """Extracts text from embedded images, diagrams, or scanned pages via OCR."""
-        if not is_ocr_available():
-            return []
-
-        ocr_blocks: List[str] = []
+    def _extract_structured_page(self, doc: pymupdf.Document, page: pymupdf.Page) -> str:
+        """Preserves visual boundaries and font hierarchy to avoid cross-block pollution."""
         try:
-            doc = pymupdf.open(file_path)
-            for page_num in range(len(doc)):
-                page = doc[page_num]
-                page_text = page.get_text().strip()
-                image_list = page.get_images(full=True)
+            page_dict: Dict[str, Any] = page.get_text("dict")
+            blocks = page_dict.get("blocks", [])
+            lines_out: List[str] = []
 
-                # Check for scanned page: very little selectable text but images/visuals present
-                if len(page_text) < 60 and len(image_list) > 0:
-                    try:
-                        pix = page.get_pixmap(dpi=150)
-                        page_ocr = extract_text_from_image_bytes(pix.tobytes("png"))
-                        if page_ocr and len(page_ocr) > len(page_text):
-                            ocr_blocks.append(
-                                f"### 📄 Page {page_num + 1} Scanned Content (OCR)\n\n"
-                                f"```text\n{page_ocr}\n```"
-                            )
-                            continue
-                    except Exception:
-                        pass
+            for block in blocks:
+                if block.get("type") == 0:  # Text block
+                    block_lines: List[str] = []
+                    for line in block.get("lines", []):
+                        line_text = "".join(span.get("text", "") for span in line.get("spans", [])).strip()
+                        if line_text:
+                            first_span = line.get("spans", [{}])[0]
+                            font_size = first_span.get("size", 10)
+                            flags = first_span.get("flags", 0)
+                            is_bold = bool(flags & (1 << 4))
 
-                # Inspect embedded images on this page
-                for img_idx, img_info in enumerate(image_list, start=1):
-                    xref = img_info[0]
-                    try:
-                        base_image = doc.extract_image(xref)
-                        image_bytes = base_image.get("image")
-                        if not image_bytes:
-                            continue
-                        img_ocr = extract_text_from_image_bytes(image_bytes)
-                        # Avoid duplicating text that is already in page text
-                        if img_ocr and img_ocr not in page_text:
-                            ocr_blocks.append(
-                                f"### 🖼️ Figure {img_idx} on Page {page_num + 1} (OCR)\n\n"
-                                f"```text\n{img_ocr}\n```"
-                            )
-                    except Exception:
-                        continue
-            doc.close()
+                            if (is_bold or font_size > 12.5) and len(line_text) < 90:
+                                block_lines.append(f"\n**{line_text}**")
+                            else:
+                                block_lines.append(line_text)
+
+                    if block_lines:
+                        lines_out.append("\n".join(block_lines))
+
+            extracted = "\n\n".join(lines_out).strip()
+            return extracted if extracted else pymupdf4llm.to_markdown(doc, pages=[page.number]).strip()
         except Exception:
-            pass
+            return pymupdf4llm.to_markdown(doc, pages=[page.number]).strip()
 
-        return ocr_blocks
+    def _extract_annotated_links(self, page: pymupdf.Page) -> List[Dict[str, str]]:
+        """Extracts native hyperlink references embedded in PDF coordinates."""
+        links: List[Dict[str, str]] = []
+        for link in page.get_links():
+            uri = link.get("uri")
+            if uri:
+                rect = link.get("from")
+                label = page.get_text("text", clip=rect).strip() if rect else ""
+                links.append({
+                    "title": label if label else uri,
+                    "uri": uri
+                })
+        return links
+
+    def _extract_form_fields(self, page: pymupdf.Page) -> List[Dict[str, str]]:
+        """Extracts interactive form names and active values."""
+        fields: List[Dict[str, str]] = []
+        for widget in page.widgets():
+            name = widget.field_name or "UnknownField"
+            val = widget.field_value
+            if val is not None and str(val).strip():
+                fields.append({"name": name, "value": str(val).strip()})
+        return fields
+
+    def _ocr_entire_page(self, page: pymupdf.Page, dpi: int = 220) -> str:
+        """Rasterizes the full vector page canvas and runs OCR."""
+        try:
+            pix = page.get_pixmap(dpi=dpi)
+            ocr_result = extract_text_from_image_bytes(pix.tobytes("png"), min_length=15, psm_mode=6)
+            return ocr_result.strip() if ocr_result else ""
+        except Exception:
+            return ""

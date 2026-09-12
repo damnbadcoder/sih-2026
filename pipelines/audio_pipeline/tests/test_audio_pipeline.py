@@ -5,6 +5,7 @@ import io
 import math
 import struct
 import wave
+from pathlib import Path
 from pipelines.audio_pipeline.ingest import AudioPipeline, ingest_audio
 from pipelines.audio_pipeline.extractors.preprocessor import AudioPreprocessor
 from pipelines.audio_pipeline.extractors.metadata_extractor import AudioMetadataExtractor
@@ -79,6 +80,33 @@ class TestAudioPipeline(unittest.TestCase):
 
     def test_audio_pipeline_fallback_case(self):
         test_audio_pipeline_fallback()
+
+    def test_sample_audio_file_mp3_ingestion(self):
+        sample_path = Path(__file__).parent / "samples" / "10090.mp3"
+        if not sample_path.exists():
+            self.skipTest("10090.mp3 not found in samples")
+
+        # 1. Preprocessor verification
+        raw, name, mime, size_kb, duration = AudioPreprocessor.load_and_preprocess(sample_path)
+        self.assertEqual(name, "10090.mp3")
+        self.assertEqual(mime, "audio/mp3")
+        self.assertGreater(size_kb, 4000)
+        self.assertIsNotNone(duration)
+        self.assertGreater(duration, 300)
+
+        # 2. Metadata inspection
+        meta = AudioMetadataExtractor.inspect(raw)
+        self.assertEqual(meta["channels"], 1)
+        self.assertEqual(meta["sample_rate_hz"], 44100)
+
+        # 3. Pipeline execution
+        pipeline = AudioPipeline()
+        result = pipeline.process(sample_path)
+        self.assertIsNotNone(result)
+        self.assertEqual(result.metadata.source_audio_name, "10090.mp3")
+        self.assertGreaterEqual(len(result.grounding_sources), 1)
+        self.assertTrue(len(result.markdown_output) > 0)
+        self.assertTrue(len(result.title) > 0)
 
 
 if __name__ == "__main__":
