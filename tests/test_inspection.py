@@ -25,9 +25,11 @@ from app.models.job import Job
 from app.models.user import User
 from app.processing.inspection import (
     AudioInspector,
-    ImageInspector,
     InspectionError,
     InspectionResult,
+    MarkupInspector,
+    RTFInspector,
+    SigmaInspector,
     TextInspector,
     VideoInspector,
     get_inspector,
@@ -160,30 +162,45 @@ def test_classify_returns_format_class():
 # --- inspector selection ----------------------------------------------------
 
 
-def test_inspector_selection_returns_text_and_none_for_others():
-    assert isinstance(get_inspector(MEDIA_CATEGORY_TEXT), TextInspector)
+def test_inspector_selection_fine_grained_and_coarse_ambiguity():
+    # Coarse lookup over a multi-inspector category (text/document/image/
+    # presentation) is ambiguous -> None; callers must pass a FormatClass.
+    assert get_inspector(MEDIA_CATEGORY_TEXT) is None
     assert get_inspector(MEDIA_CATEGORY_DOCUMENT) is None
-    # Presentation and unknown categories have no registered inspector.
+    assert get_inspector(MEDIA_CATEGORY_IMAGE) is None
     assert get_inspector(MEDIA_CATEGORY_PRESENTATION) is None
+    # Unknown category has no registered inspector.
     assert get_inspector(MEDIA_CATEGORY_UNKNOWN) is None
-    # Image/audio/video categories are now served by their own inspectors.
-    assert isinstance(get_inspector(MEDIA_CATEGORY_IMAGE), ImageInspector)
+    # Audio/video are single-inspector: coarse lookup works.
     assert isinstance(get_inspector(MEDIA_CATEGORY_AUDIO), AudioInspector)
     assert isinstance(get_inspector(MEDIA_CATEGORY_VIDEO), VideoInspector)
+    # Format-aware selection resolves each concrete inspector.
+    assert isinstance(
+        get_inspector(classify_format("notes.txt", "text/plain")), TextInspector
+    )
+    assert isinstance(
+        get_inspector(classify_format("feed.xml", "application/xml")), MarkupInspector
+    )
+    assert isinstance(
+        get_inspector(classify_format("rule.sigma", "text/yaml")), SigmaInspector
+    )
+    assert isinstance(
+        get_inspector(classify_format("letter.rtf", "application/rtf")), RTFInspector
+    )
 
 
 async def test_register_inspector_makes_category_supported():
     class _DummyInspector:
-        media_category = MEDIA_CATEGORY_PRESENTATION
+        media_category = MEDIA_CATEGORY_UNKNOWN
 
         async def inspect(self, file, storage) -> InspectionResult:
             raise AssertionError("should not be called")
 
     register_inspector(_DummyInspector())
     try:
-        assert get_inspector(MEDIA_CATEGORY_PRESENTATION) is not None
+        assert get_inspector(MEDIA_CATEGORY_UNKNOWN) is not None
     finally:
-        inspection_registry._INSPECTORS.pop(MEDIA_CATEGORY_PRESENTATION, None)
+        inspection_registry._INSPECTORS.pop(MEDIA_CATEGORY_UNKNOWN, None)
 
 
 # --- TEXT inspection --------------------------------------------------------
@@ -415,21 +432,51 @@ async def test_processing_calls_inspection_for_text(
     ]
 
 
-async def test_processing_unsupported_presentation_completes_but_flagged(
+async def test_processing_inspects_xml_via_markup_inspector(
     client: AsyncClient, storage: LocalStorage
 ):
-    email = unique_email("insp_pptx")
+    email = unique_email("insp_xml")
+    CREATED_EMAILS.append(email)
+    _, token = await _signup_and_login(client, email)
+    job_id = await _create_job(client, token)
+    await _upload(
+        client,
+        token,
+        job_id,
+        "feed.xml",
+        b'<rss version="2.0"><channel><title>Alert feed</title></channel></rss>',
+        "application/xml",
+    )
+
+    result = await _reserve_and_process(job_id, storage)
+
+    assert await _job_status(job_id) == "completed"
+    artifact = await _read_artifact(storage, result.artifact_path)
+    assert artifact["inspected_files"] == [
+        {
+            "original_filename": "feed.xml",
+            "media_category": MEDIA_CATEGORY_TEXT,
+            "supported_for_inspection": True,
+            "extracted_chars": 10,
+            "metadata": {"format": "xml", "root": "rss", "char_count": 10, "truncated": False},
+        }
+    ]
+
+
+async def test_processing_unsupported_unknown_extension_completes_but_flagged(
+    client: AsyncClient, storage: LocalStorage
+):
+    email = unique_email("insp_unreg")
     CREATED_EMAILS.append(email)
     _, token = await _signup_and_login(client, email)
     job_id = await _create_job(client, token)
 
-    # Presentation files are not an allowed upload format anymore, so an
-    # unsupported-format input can only reach processing via a directly
-    # seeded database row (e.g. legacy data) — the flag must still surface.
-    pptx_mime = "application/vnd.openxmlformats-officedocument.presentationml.presentation"
-    input_file = make_input_file(storage, "slides.pptx", pptx_mime, b"%PPTX fake bytes")
+    # An input with an extension that has no registered inspector still reaches
+    # processing via a directly seeded database row (e.g. legacy data) — the
+    # unsupported flag must still surface at the application level.
+    input_file = make_input_file(storage, "legacy.blob", "application/octet-stream", b"blob data")
     input_file.job_id = uuid.UUID(job_id)
-    await write_via_storage(storage, input_file, b"%PPTX fake bytes")
+    await write_via_storage(storage, input_file, b"blob data")
     async with async_session_factory() as db:
         db.add(input_file)
         await db.commit()
@@ -440,8 +487,8 @@ async def test_processing_unsupported_presentation_completes_but_flagged(
     artifact = await _read_artifact(storage, result.artifact_path)
     assert artifact["inspected_files"] == [
         {
-            "original_filename": "slides.pptx",
-            "media_category": MEDIA_CATEGORY_PRESENTATION,
+            "original_filename": "legacy.blob",
+            "media_category": MEDIA_CATEGORY_UNKNOWN,
             "supported_for_inspection": False,
             "extracted_chars": None,
             "metadata": {"reason": "no inspector registered for media category"},

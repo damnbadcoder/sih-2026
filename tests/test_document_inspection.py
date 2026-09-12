@@ -17,6 +17,7 @@ from app.processing.inspection import (
     DOCXInspector,
     InspectionError,
     PDFInspector,
+    PPTXInspector,
     get_inspector,
 )
 from app.processing.service import (
@@ -170,13 +171,14 @@ def test_selection_routes_documents_to_distinct_inspectors():
     assert get_inspector(pdf) is not get_inspector(docx)
 
 
-def test_selection_unsupported_categories_are_none():
-    classifications = [
-        classify_format("slides.pptx", _PPTX_MIME),
-        classify_format("blob.xyz", "application/octet-stream"),
-    ]
-    for classification in classifications:
-        assert get_inspector(classification) is None
+def test_selection_resolves_pptx_via_format_class():
+    inspector = get_inspector(classify_format("slides.pptx", _PPTX_MIME))
+    assert isinstance(inspector, PPTXInspector)
+
+
+def test_selection_unknown_category_is_none():
+    classification = classify_format("blob.xyz", "application/octet-stream")
+    assert get_inspector(classification) is None
 
 
 def test_selection_resolves_new_supported_formats():

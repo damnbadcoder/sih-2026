@@ -7,24 +7,41 @@ from app.processing.inspection.base import (
     stream_to_buffer,
 )
 from app.processing.inspection.docx import DOCXInspector
+from app.processing.inspection.evtx import EVTXInspector
 from app.processing.inspection.image import ImageInspector
+from app.processing.inspection.legacy_office import DOCInspector, PPTInspector
+from app.processing.inspection.markup import MarkupInspector
 from app.processing.inspection.pdf import PDFInspector
+from app.processing.inspection.pptx import PPTXInspector
 from app.processing.inspection.registry import get_inspector, register_inspector
+from app.processing.inspection.rtf import RTFInspector
+from app.processing.inspection.sigma import SigmaInspector
 from app.processing.inspection.spreadsheet import XLSXInspector
+from app.processing.inspection.svg import SVGInspector
 from app.processing.inspection.text import TextInspector
 from app.processing.inspection.video import VideoInspector
+from app.processing.inspection.xls import XLSInspector
 
 __all__ = [
     "AudioInspector",
     "BaseInspector",
     "ContentInspector",
+    "DOCInspector",
     "DOCXInspector",
+    "EVTXInspector",
     "ImageInspector",
     "InspectionError",
     "InspectionResult",
+    "MarkupInspector",
     "PDFInspector",
+    "PPTInspector",
+    "PPTXInspector",
+    "RTFInspector",
+    "SigmaInspector",
+    "SVGInspector",
     "TextInspector",
     "VideoInspector",
+    "XLSInspector",
     "XLSXInspector",
     "get_inspector",
     "register_inspector",

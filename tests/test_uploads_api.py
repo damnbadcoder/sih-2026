@@ -17,7 +17,9 @@ from app.models.user import User
 from app.storage import get_storage
 from app.storage.local import LocalStorage
 
-_STORED_NAME_RE = re.compile(r"[0-9a-f]{32}\.(mp3|mp4|docx|xlsx|pdf|png|jpeg|jpg|txt|md)")
+_STORED_NAME_RE = re.compile(
+    r"[0-9a-f]{32}\.(" + "|".join(e[1:] for e in sorted(ALLOWED_UPLOAD_TYPES)) + r")"
+)
 
 CREATED_EMAILS: list[str] = []
 
@@ -185,13 +187,12 @@ async def test_valid_uploads_succeed(
 
 
 @pytest.mark.parametrize(
-    "extension",
-    ["mp3", "mp4", "docx", "xlsx", "pdf", "png", "jpeg", "jpg", "txt", "md"],
+    "extension", [e[1:] for e in sorted(ALLOWED_UPLOAD_TYPES)]
 )
-async def test_all_ten_required_formats_upload_succeed(
+async def test_all_forty_six_required_formats_upload_succeed(
     client: AsyncClient, storage: LocalStorage, extension
 ):
-    email = unique_email("up_ten")
+    email = unique_email("up_all46")
     CREATED_EMAILS.append(email)
     user_id, token = await _signup_and_login(client, email)
     job_id = await _create_job(client, token)
@@ -305,8 +306,8 @@ async def test_content_type_mismatch_rejected(client: AsyncClient, storage: Loca
     [
         ("run.exe", "application/octet-stream"),
         ("archive.zip", "application/zip"),
-        ("script.py", "text/x-python"),
-        ("icons.svg", "image/svg+xml"),
+        ("script.js", "text/javascript"),
+        ("photo.gif", "image/gif"),
     ],
 )
 async def test_unsupported_type_rejected(
