@@ -172,9 +172,7 @@ def test_selection_routes_documents_to_distinct_inspectors():
 
 def test_selection_unsupported_categories_are_none():
     classifications = [
-        classify_format("slides.pptx", _PPTX_MIME),
         classify_format("pic.png", "image/png"),
-        classify_format("song.mp3", "audio/mpeg"),
         classify_format("clip.mp4", "video/mp4"),
         classify_format("blob.xyz", "application/octet-stream"),
     ]

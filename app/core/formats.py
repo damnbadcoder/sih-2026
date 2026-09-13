@@ -183,3 +183,25 @@ def classify_format(filename: str, content_type: str | None) -> FormatClass:
         category = extension_category or mime_category or MEDIA_CATEGORY_UNKNOWN
 
     return FormatClass(media_category=category, extension=ext, mime_type=mime)
+
+def verify_magic_match(detected_magic: str | None, declared_ext: str) -> bool:
+    if detected_magic is None:
+        return True
+
+    ext_map = {
+        "pdf": ["pdf"],
+        "zip_docx": ["docx", "xlsx", "pptx", "zip"],
+        "ole": ["doc", "xls", "ppt"],
+        "png": ["png"],
+        "jpeg": ["jpg", "jpeg"],
+        "gif": ["gif"],
+        "rtf": ["rtf"],
+        "evtx": ["evtx"],
+        "mp4": ["mp4"],
+        "wav": ["wav"],
+    }
+
+    clean_ext = declared_ext.lstrip(".").lower()
+    allowed_extensions = ext_map.get(detected_magic, [])
+
+    return clean_ext in allowed_extensions

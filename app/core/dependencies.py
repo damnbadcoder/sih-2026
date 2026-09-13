@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.security import InvalidTokenError, decode_access_token
 from app.db.session import get_db
 from app.models.user import User
+from app.storage import get_storage  # <-- Added storage dependency export
 
 bearer_scheme = HTTPBearer(auto_error=False)
 

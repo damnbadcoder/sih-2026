@@ -24,6 +24,7 @@ from app.models.input_file import InputFile
 from app.models.job import Job
 from app.models.user import User
 from app.processing.inspection import (
+    AudioInspector,
     InspectionError,
     InspectionResult,
     TextInspector,
@@ -159,10 +160,10 @@ def test_classify_returns_format_class():
 
 def test_inspector_selection_returns_text_and_none_for_others():
     assert isinstance(get_inspector(MEDIA_CATEGORY_TEXT), TextInspector)
+    assert isinstance(get_inspector(MEDIA_CATEGORY_AUDIO), AudioInspector)
     assert get_inspector(MEDIA_CATEGORY_DOCUMENT) is None
     assert get_inspector(MEDIA_CATEGORY_PRESENTATION) is None
     assert get_inspector(MEDIA_CATEGORY_IMAGE) is None
-    assert get_inspector(MEDIA_CATEGORY_AUDIO) is None
     assert get_inspector(MEDIA_CATEGORY_VIDEO) is None
     assert get_inspector(MEDIA_CATEGORY_UNKNOWN) is None
 

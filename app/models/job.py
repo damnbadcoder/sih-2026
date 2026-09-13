@@ -13,6 +13,7 @@ if TYPE_CHECKING:
     from app.models.artifact import Artifact
     from app.models.input_file import InputFile
     from app.models.user import User
+    from app.models.audit_log import AuditLog
 
 
 class Job(Base):
@@ -63,6 +64,12 @@ class Job(Base):
     )
     input_files: Mapped[list["InputFile"]] = relationship(
         "InputFile",
+        back_populates="job",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
+    audit_logs: Mapped[list["AuditLog"]] = relationship(
+        "AuditLog",
         back_populates="job",
         cascade="all, delete-orphan",
         passive_deletes=True,

@@ -9,11 +9,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
 from app.core.dependencies import get_current_user
+from app.core.formats import verify_magic_match
 from app.core.uploads import UploadValidationError, normalize_filename, validate_upload_type
 from app.db.session import get_db
 from app.models.input_file import InputFile
 from app.models.job import Job
 from app.models.user import User
+from app.processing.inspection.magic import detect_magic
 from app.schemas.input_file import InputFileResponse
 from app.storage import Storage, StorageError, UploadTooLargeError, get_storage
 
@@ -52,6 +54,16 @@ async def upload_input_file(
         content_type, extension = validate_upload_type(original_filename, file.content_type)
     except UploadValidationError as exc:
         raise HTTPException(status.HTTP_415_UNSUPPORTED_MEDIA_TYPE, detail=str(exc)) from None
+
+    header = await file.read(512)
+    await file.seek(0)
+    detected_magic = detect_magic(header)
+
+    if detected_magic and not verify_magic_match(detected_magic, extension):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="File spoofing detected: header magic signature does not match declared extension or MIME type.",
+        )
 
     stored_filename = f"{uuid.uuid4().hex}{extension}"
     storage_path = f"{job.user_id}/{job.id}/input/{stored_filename}"

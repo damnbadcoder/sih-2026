@@ -6,7 +6,8 @@ from fastapi import FastAPI
 from app.api.v1.router import api_router
 from app.config import get_settings
 
-
+app = FastAPI(title="SIH-2026 Backend", version="1.0.0")
+app.include_router(api_router, prefix="/api/v1")
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     yield

@@ -3,14 +3,17 @@ from app.core.formats import (
     MEDIA_CATEGORY_TEXT,
     FormatClass,
 )
+from app.processing.inspection.audio import AudioInspector
 from app.processing.inspection.base import ContentInspector
 from app.processing.inspection.docx import DOCXInspector
 from app.processing.inspection.pdf import PDFInspector
+from app.processing.inspection.pptx import PPTXInspector
 from app.processing.inspection.text import TextInspector
 
 _INSPECTORS: dict[str, list[ContentInspector]] = {
     MEDIA_CATEGORY_TEXT: [TextInspector()],
-    MEDIA_CATEGORY_DOCUMENT: [PDFInspector(), DOCXInspector()],
+    MEDIA_CATEGORY_DOCUMENT: [PDFInspector(), DOCXInspector(), PPTXInspector()],
+    "audio": [AudioInspector()],
 }
 
 
